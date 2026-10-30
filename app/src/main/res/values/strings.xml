@@ -1,4 +1,4 @@
 <resources>
-    <string name="app_name">JARVIS</string>
-    <string name="a11y_desc">JARVIS aapke kehne par screen par tap, scroll aur type kar sakta hai. Band karne ke liye ye switch off karein.</string>
+    <string name="app_name">JARVIS AI</string>
+    <string name="a11y_desc">JARVIS aapke kehne par screen par peeche, home aur notification jaise kaam kar sakta hai. Band karne ke liye ye switch off karein.</string>
 </resources>
