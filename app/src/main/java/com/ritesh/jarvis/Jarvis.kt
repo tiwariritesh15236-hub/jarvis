@@ -54,14 +54,14 @@ object Jarvis {
         }
     }
 
-    fun setHandsFree(v: Boolean) {
+    fun updateHandsFree(v: Boolean) {
         handsFree = v
         prefs().edit().putBoolean("handsfree", v).apply()
         if (v) VoiceService.start(app) else VoiceService.instance?.pause()
         onState?.invoke()
     }
 
-    fun setWakeOnly(v: Boolean) {
+    fun updateWakeOnly(v: Boolean) {
         wakeOnly = v
         prefs().edit().putBoolean("wakeonly", v).apply()
     }

@@ -191,7 +191,7 @@ class MainActivity : Activity() {
         }
         r.contentDescription = "माइक चालू या बंद करने के लिए दबाइए"
         r.setOnClickListener {
-            Jarvis.setHandsFree(!Jarvis.handsFree)
+            Jarvis.updateHandsFree(!Jarvis.handsFree)
             if (Jarvis.handsFree) startVoice()
             updateState()
         }
@@ -377,13 +377,13 @@ class MainActivity : Activity() {
 
         col.addView(
             toggleRaw("हमेशा सुनो (बिना बटन)", "माइक चालू रहता है, बोलते ही काम करता है", Jarvis.handsFree) {
-                Jarvis.setHandsFree(it)
+                Jarvis.updateHandsFree(it)
                 if (it) startVoice()
             }, lpm(MATCH, WRAP, top = 14)
         )
         col.addView(
             toggleRaw("सिर्फ़ \"जारविस\" कहने पर काम करो", "आस-पास की बातचीत से गलती से काम नहीं होगा", Jarvis.wakeOnly) {
-                Jarvis.setWakeOnly(it)
+                Jarvis.updateWakeOnly(it)
             }, lpm(MATCH, WRAP, top = 8)
         )
         col.addView(toggle("msg", "मैसेज", "स्क्रीन खुलती है, भेजना आप दबाते हैं"), lpm(MATCH, WRAP, top = 8))
