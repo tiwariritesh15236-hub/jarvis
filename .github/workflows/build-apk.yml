@@ -14,7 +14,18 @@ jobs:
         with: { distribution: temurin, java-version: 17 }
       - uses: gradle/actions/setup-gradle@v4
         with: { gradle-version: 8.9 }
-      - run: gradle assembleDebug --no-daemon
+      - name: Build debug APK
+        shell: bash
+        run: |
+          set +e
+          gradle assembleDebug --no-daemon --console=plain > build.log 2>&1
+          code=$?
+          tail -n 5 build.log
+          if [ $code -ne 0 ]; then
+            msg=$(grep -E "^e: |error:|AAPT|What went wrong|Execution failed|Unresolved|not found" -A2 build.log | head -40 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=BUILD ERRORS::${msg}"
+          fi
+          exit $code
       - run: cp app/build/outputs/apk/debug/app-debug.apk JARVIS-AI.apk
       - uses: actions/upload-artifact@v4
         with:
