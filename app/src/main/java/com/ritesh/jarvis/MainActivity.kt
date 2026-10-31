@@ -8,11 +8,11 @@ import android.content.res.ColorStateList
 import android.graphics.Typeface
 import android.os.Bundle
 import android.provider.Settings
-import android.speech.RecognizerIntent
-import android.speech.tts.TextToSpeech
+import android.speech.SpeechRecognizer
 import android.text.InputType
 import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -20,30 +20,28 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Switch
 import android.widget.TextView
-import java.util.Locale
 
-class MainActivity : Activity(), TextToSpeech.OnInitListener {
+class MainActivity : Activity() {
 
-    private lateinit var tts: TextToSpeech
-    private lateinit var router: CommandRouter
     private lateinit var content: FrameLayout
     private lateinit var nav: LinearLayout
     private lateinit var office: OfficeView
 
     private var tab = 0
-    private var heard = ""
-    private var reply: CommandRouter.Reply? = null
-    private var orb: OrbView? = null
+    private var reactor: ReactorView? = null
     private var status: TextView? = null
+    private var strip: TextView? = null
 
     override fun onCreate(s: Bundle?) {
         super.onCreate(s)
+        Jarvis.init(this)
         window.statusBarColor = C.BG
         window.navigationBarColor = C.NAV
-        router = CommandRouter(this)
         office = OfficeView(this)
-        tts = TextToSpeech(this, this)
-        requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS), 1)
+        requestPermissions(
+            arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS, Manifest.permission.READ_CONTACTS),
+            1
+        )
 
         val root = vbox().apply { setBackgroundColor(C.BG) }
         content = FrameLayout(this)
@@ -55,70 +53,71 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         root.addView(nav, lp(MATCH, dp(64)))
         setContentView(root)
         show(0)
+        startVoice()
+    }
+
+    override fun onRequestPermissionsResult(rq: Int, perms: Array<out String>, res: IntArray) {
+        super.onRequestPermissionsResult(rq, perms, res)
+        startVoice()
+        show(tab)
     }
 
     override fun onResume() {
         super.onResume()
-        if (::content.isInitialized) show(tab)
-    }
-
-    override fun onInit(status: Int) {
-        tts.language = Locale("hi", "IN")
-    }
-
-    override fun onDestroy() {
-        tts.stop()
-        tts.shutdown()
-        super.onDestroy()
-    }
-
-    // ---------- kaam chalana ----------
-
-    private fun run(cmd: String) {
-        if (cmd.isBlank()) return
-        heard = cmd
-        val r = router.handle(cmd)
-        reply = r
-        TaskLog.add(r.agent, "$cmd → ${r.text}", if (r.ok) TaskLog.DONE else TaskLog.FAILED)
-        office.assign(r.agent, cmd, r.ok)
-        tts.speak(r.text, TextToSpeech.QUEUE_FLUSH, null, "j")
+        Jarvis.onEvent = { runOnUiThread { drain() } }
+        Jarvis.onState = { runOnUiThread { updateState() } }
+        startVoice()
+        drain()
         show(tab)
     }
 
-    private fun stopAll() {
-        tts.stop()
-        office.stopAll()
-        TaskLog.add("manager", "आपने इमरजेंसी स्टॉप दबाया। सब रुका।", TaskLog.STOPPED)
-        show(tab)
+    override fun onPause() {
+        Jarvis.onEvent = null
+        Jarvis.onState = null
+        super.onPause()
     }
 
-    private fun listen() {
-        val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-            .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            .putExtra(RecognizerIntent.EXTRA_LANGUAGE, "hi-IN")
-            .putExtra(RecognizerIntent.EXTRA_PROMPT, "बोलिए…")
-        try {
-            orb?.listening = true
-            status?.text = "सुन रहा हूँ… बोलिए"
-            startActivityForResult(i, 7)
-        } catch (e: Exception) {
-            orb?.listening = false
-            val r = CommandRouter.Reply("manager", "इस फ़ोन में आवाज़ पहचानने वाला Google ऐप नहीं मिला। नीचे लिखकर बताइए।", false)
-            reply = r
-            TaskLog.add("manager", r.text, TaskLog.FAILED)
-            show(tab)
-        }
+    private fun startVoice() {
+        if (Jarvis.handsFree) VoiceService.start(this)
     }
 
-    override fun onActivityResult(rq: Int, rs: Int, d: Intent?) {
-        super.onActivityResult(rq, rs, d)
-        orb?.listening = false
-        if (rq == 7 && rs == RESULT_OK) {
-            val said = d?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
-            if (said != null) run(said) else show(tab)
-        } else {
-            status?.text = "कुछ सुनाई नहीं दिया। फिर से दबाइए।"
+    // ---------- jo kaam hua usko ofis mein dikhana ----------
+
+    private fun drain() {
+        val jobs = ArrayList(Jarvis.pending)
+        Jarvis.pending.clear()
+        for (j in jobs) {
+            if (j.agent == "__stop") office.stopAll() else office.assign(j.agent, j.text, j.ok)
         }
+        if (jobs.isNotEmpty() && tab != 2) show(tab)
+    }
+
+    private fun stateText(): String = when {
+        !Jarvis.handsFree -> "माइक बंद · चालू करने के लिए गोले को दबाइए"
+        Jarvis.speaking -> "बोल रहा हूँ…"
+        Jarvis.listening -> "सुन रहा हूँ… बिना बटन दबाए बोलिए"
+        else -> "तैयार हो रहा हूँ…"
+    }
+
+    private fun stripText(): String {
+        val live = Agents.list.count { it.live }
+        val mic = when {
+            !Jarvis.handsFree -> "OFF"
+            Jarvis.speaking -> "SPEAKING"
+            Jarvis.listening -> "LIVE"
+            else -> "WAIT"
+        }
+        return "● SYSTEM ONLINE  ·  MIC: $mic  ·  AGENTS: $live/${Agents.list.size}"
+    }
+
+    private fun updateState() {
+        reactor?.mode = when {
+            !Jarvis.handsFree -> 2
+            Jarvis.speaking -> 1
+            else -> 0
+        }
+        status?.text = stateText()
+        strip?.text = stripText()
     }
 
     // ---------- tab ----------
@@ -126,7 +125,10 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     private fun show(i: Int) {
         tab = i
         content.removeAllViews()
-        (office.parent as? android.view.ViewGroup)?.removeView(office)
+        (office.parent as? ViewGroup)?.removeView(office)
+        reactor = null
+        status = null
+        strip = null
         val v = when (i) {
             0 -> home()
             1 -> team()
@@ -144,7 +146,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         for (i in names.indices) {
             nav.addView(TextView(this).apply {
                 text = names[i]
-                textSize = 14f
+                textSize = 13.5f
                 gravity = Gravity.CENTER
                 setTextColor(if (i == tab) C.CYAN else C.MUTED)
                 if (i == tab) setTypeface(typeface, Typeface.BOLD)
@@ -167,36 +169,60 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         setTypeface(typeface, Typeface.BOLD)
         setTextColor(C.ON_RED)
         background = shape(C.RED, 0, 16)
-        setOnClickListener { stopAll() }
+        setOnClickListener { Jarvis.stopAll() }
     }
 
     // ---------- 1. home ----------
 
     private fun home(): View {
         val col = page()
-        col.addView(label("JARVIS", 15f, C.CYAN, true).apply { letterSpacing = 0.22f })
 
-        val o = OrbView(this)
-        orb = o
-        o.contentDescription = "बोलने के लिए दबाइए"
-        o.setOnClickListener { listen() }
-        col.addView(o, lpm(dp(220), dp(220), top = 12).apply { gravity = Gravity.CENTER_HORIZONTAL })
+        val st = label(stripText(), 11.5f, C.GREEN, true, true)
+        strip = st
+        col.addView(st)
+        col.addView(label("J.A.R.V.I.S", 26f, C.CYAN, true, true).apply { letterSpacing = 0.25f }, lpm(MATCH, WRAP, top = 6))
 
-        val st = label("माइक दबाइए और बोलिए", 20f, C.TEXT, true).apply { gravity = Gravity.CENTER }
-        status = st
-        col.addView(st, lpm(MATCH, WRAP, top = 4))
-        col.addView(label("हिंदी, Hinglish या English में बोल सकते हैं", 14f, C.MUTED).apply { gravity = Gravity.CENTER })
+        val r = ReactorView(this)
+        reactor = r
+        r.mode = when {
+            !Jarvis.handsFree -> 2
+            Jarvis.speaking -> 1
+            else -> 0
+        }
+        r.contentDescription = "माइक चालू या बंद करने के लिए दबाइए"
+        r.setOnClickListener {
+            Jarvis.setHandsFree(!Jarvis.handsFree)
+            if (Jarvis.handsFree) startVoice()
+            updateState()
+        }
+        col.addView(r, lpm(dp(250), dp(250), top = 10).apply { gravity = Gravity.CENTER_HORIZONTAL })
 
-        if (heard.isNotEmpty()) {
+        val s2 = label(stateText(), 17f, C.TEXT, true).apply { gravity = Gravity.CENTER }
+        status = s2
+        col.addView(s2, lpm(MATCH, WRAP, top = 6))
+        col.addView(label("\"जारविस, टॉर्च चालू करो\" या सीधे \"टॉर्च चालू करो\"", 13.5f, C.MUTED).apply { gravity = Gravity.CENTER }, lpm(MATCH, WRAP, top = 2))
+
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            val warn = card(C.AMBER)
+            warn.addView(label("इस फ़ोन में आवाज़ पहचानने वाला Google ऐप नहीं मिला। Play Store से Google ऐप इंस्टॉल या अपडेट कीजिए, तब बिना बटन बोलना चलेगा। तब तक नीचे लिखकर बताइए।", 14f, C.AMBER))
+            col.addView(warn, lpm(MATCH, WRAP, top = 14))
+        }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            val warn = card(C.RED)
+            warn.addView(label("माइक की अनुमति नहीं है। फ़ोन की सेटिंग में JARVIS AI को माइक की अनुमति दीजिए।", 14f, C.RED))
+            col.addView(warn, lpm(MATCH, WRAP, top = 14))
+        }
+
+        if (Jarvis.heard.isNotEmpty()) {
             val c1 = card()
             c1.addView(label("आपने कहा", 12.5f, C.MUTED))
-            c1.addView(label("\"$heard\"", 16f, C.TEXT))
-            col.addView(c1, lpm(MATCH, WRAP, top = 18))
+            c1.addView(label("\"${Jarvis.heard}\"", 16f, C.TEXT))
+            col.addView(c1, lpm(MATCH, WRAP, top = 16))
         }
-        reply?.let { r ->
-            val c2 = card(if (r.ok) C.AMBER else C.RED)
-            c2.addView(label(Agents.nameOf(r.agent), 12.5f, if (r.ok) C.AMBER else C.RED, true))
-            c2.addView(label(r.text, 16f, C.TEXT))
+        Jarvis.reply?.let { rp ->
+            val c2 = card(if (rp.ok) C.AMBER else C.RED)
+            c2.addView(label(Agents.nameOf(rp.agent), 12.5f, if (rp.ok) C.AMBER else C.RED, true))
+            c2.addView(label(rp.text, 16f, C.TEXT))
             col.addView(c2, lpm(MATCH, WRAP, top = 12))
         }
 
@@ -216,11 +242,28 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             isAllCaps = false
             setTextColor(C.ON_CYAN)
             background = shape(C.CYAN, 0, 24)
-            setOnClickListener { val t = input.text.toString(); input.setText(""); run(t) }
+            setOnClickListener { val t = input.text.toString(); input.setText(""); Jarvis.run(t) }
         }
         row.addView(input, lp(0, dp(48), 1f))
         row.addView(send, lpm(WRAP, dp(48), left = 10))
-        col.addView(row, lpm(MATCH, WRAP, top = 20))
+        col.addView(row, lpm(MATCH, WRAP, top = 16))
+
+        val ex = card()
+        ex.addView(label("ये बोलकर देखिए", 15f, C.CYAN, true, true))
+        val samples = listOf(
+            "रमेश को कॉल करो",
+            "यूट्यूब पर अरिजीत का गाना चलाओ",
+            "सुबह 6 बजे का अलार्म लगाओ",
+            "टॉर्च चालू करो",
+            "आवाज़ बढ़ाओ",
+            "दिल्ली का रास्ता दिखाओ",
+            "नोट लिखो दूध लाना है",
+            "25 गुणा 4 कितना हुआ",
+            "नीचे स्क्रॉल करो",
+            "क्या कर सकते हो"
+        )
+        for (s in samples) ex.addView(label("› $s", 14f, C.MUTED), lpm(MATCH, WRAP, top = 6))
+        col.addView(ex, lpm(MATCH, WRAP, top = 16))
         return col
     }
 
@@ -261,9 +304,9 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
 
     private fun officeTab(): View {
         val col = page()
-        col.addView(title("JARVIS ऑफिस", "आप हुक्म दीजिए, Manager एजेंट को बुलाकर काम देता है"))
-        col.addView(office, lpm(MATCH, dp(520), top = 14))
-        col.addView(label("यहाँ जो चलता है वह असली काम से चलता है। होम पर जाकर बोलिए, फिर यहाँ देखिए।", 13.5f, C.MUTED), lpm(MATCH, WRAP, top = 12))
+        col.addView(title("JARVIS ऑफिस", "Manager बुलाता है, एजेंट डायरी लेकर आता है, फिर अपनी सीट पर काम करता है"))
+        col.addView(office, lpm(MATCH, dp(700), top = 14))
+        col.addView(label("यहाँ सिर्फ़ असली काम दिखता है। बोलकर कोई हुक्म दीजिए, फिर यहाँ देखिए।", 13.5f, C.MUTED), lpm(MATCH, WRAP, top = 12))
         return col
     }
 
@@ -275,7 +318,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
 
         if (TaskLog.entries.isEmpty()) {
             val c = card()
-            c.addView(label("अभी कोई काम नहीं हुआ। होम पर जाकर बोलिए।", 15f, C.MUTED))
+            c.addView(label("अभी कोई काम नहीं हुआ। बोलिए, फिर यहाँ दिखेगा।", 15f, C.MUTED))
             col.addView(c, lpm(MATCH, WRAP, top = 16))
         }
         for (e in TaskLog.entries.reversed()) {
@@ -302,7 +345,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
 
     // ---------- 4. suraksha ----------
 
-    private fun toggle(key: String, name: String, sub: String): View {
+    private fun toggleRaw(name: String, sub: String, checked: Boolean, onChange: (Boolean) -> Unit): View {
         val r = hbox().apply {
             background = shape(C.SURFACE, C.BORDER, 14)
             setPadding(dp(14), dp(10), dp(14), dp(10))
@@ -311,13 +354,13 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         t.addView(label(name, 15.5f, C.TEXT, true))
         t.addView(label(sub, 12.5f, C.MUTED))
         val sw = Switch(this).apply {
-            isChecked = router.allowed(key)
+            isChecked = checked
             thumbTintList = ColorStateList.valueOf(C.TEXT)
-            trackTintList = ColorStateList.valueOf(if (isChecked) C.CYAN else C.BORDER)
+            trackTintList = ColorStateList.valueOf(if (checked) C.CYAN else C.BORDER)
             contentDescription = name
             setOnCheckedChangeListener { b, v ->
-                router.setAllowed(key, v)
                 (b as Switch).trackTintList = ColorStateList.valueOf(if (v) C.CYAN else C.BORDER)
+                onChange(v)
             }
         }
         r.addView(t, lp(0, WRAP, 1f))
@@ -325,13 +368,27 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         return r
     }
 
+    private fun toggle(key: String, name: String, sub: String): View =
+        toggleRaw(name, sub, Jarvis.router.allowed(key)) { Jarvis.router.setAllowed(key, it) }
+
     private fun safety(): View {
         val col = page()
         col.addView(title("अनुमति और सुरक्षा", "JARVIS क्या कर सकता है, यह आप तय करते हैं"))
 
-        col.addView(toggle("msg", "मैसेज", "स्क्रीन खुलती है, भेजना आप दबाते हैं"), lpm(MATCH, WRAP, top = 14))
+        col.addView(
+            toggleRaw("हमेशा सुनो (बिना बटन)", "माइक चालू रहता है, बोलते ही काम करता है", Jarvis.handsFree) {
+                Jarvis.setHandsFree(it)
+                if (it) startVoice()
+            }, lpm(MATCH, WRAP, top = 14)
+        )
+        col.addView(
+            toggleRaw("सिर्फ़ \"जारविस\" कहने पर काम करो", "आस-पास की बातचीत से गलती से काम नहीं होगा", Jarvis.wakeOnly) {
+                Jarvis.setWakeOnly(it)
+            }, lpm(MATCH, WRAP, top = 8)
+        )
+        col.addView(toggle("msg", "मैसेज", "स्क्रीन खुलती है, भेजना आप दबाते हैं"), lpm(MATCH, WRAP, top = 8))
         col.addView(toggle("call", "कॉल", "डायलर खुलता है, कॉल आप दबाते हैं"), lpm(MATCH, WRAP, top = 8))
-        col.addView(toggle("phone", "फ़ोन कंट्रोल", "ऐप खोलना, पीछे, होम, टाइमर"), lpm(MATCH, WRAP, top = 8))
+        col.addView(toggle("phone", "फ़ोन कंट्रोल", "ऐप खोलना, स्क्रॉल, क्लिक, टॉर्च, आवाज़, अलार्म"), lpm(MATCH, WRAP, top = 8))
 
         val pay = hbox().apply {
             background = shape(C.SURFACE, C.RED, 14)
@@ -344,13 +401,14 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         pay.addView(label("हमेशा बंद", 13f, C.RED, true))
         col.addView(pay, lpm(MATCH, WRAP, top = 8))
 
-        // asli haal
         val micOk = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        val contactsOk = checkSelfPermission(Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED
         val a11yOk = JarvisAccessibilityService.instance != null
         val st = card()
         st.addView(label("फ़ोन की असली स्थिति", 16f, C.TEXT, true))
         st.addView(label((if (micOk) "✓ माइक की अनुमति मिली है" else "✗ माइक की अनुमति नहीं है"), 14.5f, if (micOk) C.GREEN else C.RED), lpm(MATCH, WRAP, top = 6))
-        st.addView(label((if (a11yOk) "✓ फ़ोन कंट्रोल चालू है" else "✗ फ़ोन कंट्रोल बंद है (पीछे, होम, नोटिफ़िकेशन के लिए चालू करें)"), 14.5f, if (a11yOk) C.GREEN else C.AMBER), lpm(MATCH, WRAP, top = 4))
+        st.addView(label((if (contactsOk) "✓ कॉन्टैक्ट पढ़ सकता है (नाम से कॉल/मैसेज)" else "✗ कॉन्टैक्ट की अनुमति नहीं (नाम से कॉल नहीं होगा, नंबर बोलना होगा)"), 14.5f, if (contactsOk) C.GREEN else C.AMBER), lpm(MATCH, WRAP, top = 4))
+        st.addView(label((if (a11yOk) "✓ फ़ोन कंट्रोल चालू है" else "✗ फ़ोन कंट्रोल बंद है (स्क्रॉल, क्लिक, पीछे, होम के लिए चालू करें)"), 14.5f, if (a11yOk) C.GREEN else C.AMBER), lpm(MATCH, WRAP, top = 4))
         if (!a11yOk) {
             st.addView(Button(this).apply {
                 text = "सेटिंग खोलिए"
@@ -361,6 +419,11 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             }, lpm(MATCH, dp(44), top = 10))
         }
         col.addView(st, lpm(MATCH, WRAP, top = 12))
+
+        val bg = card()
+        bg.addView(label("बैकग्राउंड में सुनता रहे", 16f, C.CYAN, true))
+        bg.addView(label("फ़ोन की सेटिंग > ऐप > JARVIS AI > बैटरी में \"Unrestricted / बिना रोक\" चुनिए, वरना कुछ फ़ोन ऐप को बंद कर देते हैं।", 14f, C.MUTED))
+        col.addView(bg, lpm(MATCH, WRAP, top = 12))
 
         val honest = card()
         honest.addView(label("सच्ची रिपोर्ट", 16f, C.GREEN, true))

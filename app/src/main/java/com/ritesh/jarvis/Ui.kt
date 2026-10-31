@@ -39,12 +39,13 @@ fun Context.shape(fill: Int, stroke: Int = 0, radiusDp: Int = 14, strokeDp: Int 
         if (stroke != 0) setStroke(dp(strokeDp), stroke)
     }
 
-fun Context.label(text: String, sizeSp: Float = 15f, color: Int = C.TEXT, bold: Boolean = false): TextView =
+fun Context.label(text: String, sizeSp: Float = 15f, color: Int = C.TEXT, bold: Boolean = false, mono: Boolean = false): TextView =
     TextView(this).apply {
         this.text = text
         textSize = sizeSp
         setTextColor(color)
-        if (bold) setTypeface(typeface, Typeface.BOLD)
+        if (mono) setTypeface(Typeface.MONOSPACE, if (bold) Typeface.BOLD else Typeface.NORMAL)
+        else if (bold) setTypeface(typeface, Typeface.BOLD)
     }
 
 fun Context.vbox(): LinearLayout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
