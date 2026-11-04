@@ -358,12 +358,47 @@ class CommandRouter(private val ctx: Context) {
                 else Reply("msg", "मैसेज नहीं खुल पाया।", false)
             }
 
+            // ---- game ----
+            has(q, "game|गेम|खेल") -> game(q)
+
             // ---- calc ----
             else -> {
                 val c = calc(q)
                 if (c != null) Reply("calc", c)
                 else Reply("manager", "यह काम अभी मुझे नहीं आता। \"क्या कर सकते हो\" बोलकर मेरे काम सुन लीजिए।", false, true)
             }
+        }
+    }
+
+    // ---------- khel ----------
+
+    private var guessTarget: Int? = null
+    private var guessTries = 0
+
+    private fun game(q: String): Reply {
+        has(q, "band|बंद|रुको|stop|रोको").let {
+            if (it && guessTarget != null) { guessTarget = null; return Reply("game", "ठीक है, खेल बंद किया।") }
+        }
+        if (guessTarget == null) {
+            if (has(q, "khelo|खेलो|shuru|शुरू|start|नया")) {
+                guessTarget = (1..20).random()
+                guessTries = 0
+                return Reply("game", "ठीक है, मैंने 1 से 20 के बीच एक अंक सोच लिया है। बोलिए, कौन सा अंक है?")
+            }
+            return Reply("game", "गिनती का खेल खेलना है? बोलिए: गेम खेलो।")
+        }
+        val n = Regex("\\d+").find(q)?.value?.toIntOrNull()
+        if (n == null) return Reply("game", "कोई अंक बोलिए, 1 से 20 के बीच।")
+        guessTries++
+        val target = guessTarget!!
+        return when {
+            n == target -> {
+                val t = guessTries
+                guessTarget = null
+                Reply("game", "सही! $t बार में आपने अंक $target पकड़ लिया। फिर से खेलने के लिए बोलिए: गेम खेलो।")
+            }
+            n < target -> Reply("game", "इससे बड़ा अंक सोचा है।")
+            else -> Reply("game", "इससे छोटा अंक सोचा है।")
         }
     }
 

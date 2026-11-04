@@ -48,10 +48,13 @@ class OfficeView(ctx: Context) : View(ctx) {
     private val mgrY = 0.1f
 
     init {
+        val perRow = 4
+        val rows = (Agents.list.size + perRow - 1) / perRow
+        val rowGap = if (rows > 1) 0.56f / (rows - 1) else 0f
         for ((i, a) in Agents.list.withIndex()) {
-            val row = i / 4
-            val col = i % 4
-            walkers.add(W(a, 0.125f + col * 0.25f, 0.40f + row * 0.125f, i))
+            val row = i / perRow
+            val col = i % perRow
+            walkers.add(W(a, 0.125f + col * 0.25f, 0.40f + row * rowGap, i))
         }
     }
 

@@ -71,11 +71,16 @@ class MainActivity : Activity() {
         Jarvis.onEvent = { runOnUiThread { drain() } }
         Jarvis.onState = { runOnUiThread { updateState() } }
         startVoice()
-        drain()
-        show(tab)
+        if (Jarvis.pin.isNotBlank() && !Jarvis.unlocked) {
+            showLock()
+        } else {
+            drain()
+            show(tab)
+        }
     }
 
     override fun onPause() {
+        if (Jarvis.pin.isNotBlank()) Jarvis.unlocked = false
         Jarvis.onEvent = null
         Jarvis.onState = null
         super.onPause()
@@ -83,6 +88,29 @@ class MainActivity : Activity() {
 
     private fun startVoice() {
         if (Jarvis.handsFree) VoiceService.start(this)
+    }
+
+    // ---------- taala (sirf app kholne ke liye) ----------
+
+    private fun showLock() {
+        content.removeAllViews()
+        nav.removeAllViews()
+        val col = page().apply { gravity = Gravity.CENTER_HORIZONTAL }
+        col.addView(ReactorView(this).apply { mode = 2 }, lpm(dp(140), dp(140), top = 40).apply { gravity = Gravity.CENTER_HORIZONTAL })
+        col.addView(label(Jarvis.assistantName, 22f, C.CYAN, true, true).apply { gravity = Gravity.CENTER }, lpm(MATCH, WRAP, top = 14))
+        col.addView(label("यह सिर्फ़ आपके लिए है। PIN डालिए।", 14f, C.MUTED).apply { gravity = Gravity.CENTER }, lpm(MATCH, WRAP, top = 4))
+        val pinF = field("PIN", "", true).apply {
+            gravity = Gravity.CENTER
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
+        }
+        col.addView(pinF, lpm(dp(220), dp(52), top = 24))
+        val warn = label("", 13.5f, C.RED).apply { gravity = Gravity.CENTER }
+        col.addView(warn, lpm(MATCH, WRAP, top = 8))
+        col.addView(smallButton("खोलिए", C.CYAN) {
+            if (Jarvis.tryUnlock(pinF.text.toString())) { drain(); show(tab) }
+            else { warn.text = "PIN सही नहीं है।"; pinF.setText("") }
+        }, lpm(dp(220), dp(48), top = 10))
+        content.addView(ScrollView(this).apply { isFillViewport = true; addView(col) })
     }
 
     // ---------- jo kaam hua usko ofis mein dikhana ----------
@@ -93,7 +121,8 @@ class MainActivity : Activity() {
         for (j in jobs) {
             if (j.agent == "__stop") office.stopAll() else office.assign(j.agent, j.text, j.ok)
         }
-        if (jobs.isNotEmpty() && tab != 2) show(tab)
+        val locked = Jarvis.pin.isNotBlank() && !Jarvis.unlocked
+        if (jobs.isNotEmpty() && tab != 2 && !locked) show(tab)
     }
 
     private fun stateText(): String = when {
@@ -185,7 +214,7 @@ class MainActivity : Activity() {
         val st = label(stripText(), 11.5f, C.GREEN, true, true)
         strip = st
         col.addView(st)
-        col.addView(label("J.A.R.V.I.S", 26f, C.CYAN, true, true).apply { letterSpacing = 0.25f }, lpm(MATCH, WRAP, top = 6))
+        col.addView(label(Jarvis.assistantName.uppercase(), 26f, C.CYAN, true, true).apply { letterSpacing = 0.25f }, lpm(MATCH, WRAP, top = 6))
 
         val r = ReactorView(this)
         reactor = r
@@ -205,11 +234,11 @@ class MainActivity : Activity() {
         val s2 = label(stateText(), 17f, C.TEXT, true).apply { gravity = Gravity.CENTER }
         status = s2
         col.addView(s2, lpm(MATCH, WRAP, top = 6))
-        col.addView(label("पहले \"जारविस\" बोलिए, फिर हुक्म: \"जारविस, टॉर्च चालू करो\"", 13.5f, C.MUTED).apply { gravity = Gravity.CENTER }, lpm(MATCH, WRAP, top = 2))
+        col.addView(label("पहले \"${Jarvis.assistantName}\" बोलिए, फिर हुक्म", 13.5f, C.MUTED).apply { gravity = Gravity.CENTER }, lpm(MATCH, WRAP, top = 2))
 
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
             val warn = card(C.AMBER)
-            warn.addView(label("इस फ़ोन में आवाज़ पहचानने वाला Google ऐप नहीं मिला। Play Store से Google ऐप इंस्टॉल या अपडेट कीजिए, तब बिना बटन बोलना चलेगा। तब तक नीचे लिखकर बताइए।", 14f, C.AMBER))
+            warn.addView(label("इस फ़ोन में आवाज़ पहचानने वाला Google ऐप नहीं मिला। Play Store से Google ऐप इंस्टॉल या अपडेट कीजिए, तब बोलना चलेगा।", 14f, C.AMBER))
             col.addView(warn, lpm(MATCH, WRAP, top = 14))
         }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
@@ -231,44 +260,6 @@ class MainActivity : Activity() {
             col.addView(c2, lpm(MATCH, WRAP, top = 12))
         }
 
-        val row = hbox()
-        val input = EditText(this).apply {
-            hint = "या यहाँ लिखकर बताइए…"
-            setHintTextColor(C.MUTED)
-            setTextColor(C.TEXT)
-            textSize = 16f
-            inputType = InputType.TYPE_CLASS_TEXT
-            setSingleLine()
-            background = shape(C.SURFACE, C.BORDER, 24)
-            setPadding(dp(18), 0, dp(18), 0)
-        }
-        val send = Button(this).apply {
-            text = "भेजें"
-            isAllCaps = false
-            setTextColor(C.ON_CYAN)
-            background = shape(C.CYAN, 0, 24)
-            setOnClickListener { val t = input.text.toString(); input.setText(""); Jarvis.run(t) }
-        }
-        row.addView(input, lp(0, dp(48), 1f))
-        row.addView(send, lpm(WRAP, dp(48), left = 10))
-        col.addView(row, lpm(MATCH, WRAP, top = 16))
-
-        val ex = card()
-        ex.addView(label("ये बोलकर देखिए", 15f, C.CYAN, true, true))
-        val samples = listOf(
-            "रमेश को कॉल करो",
-            "यूट्यूब पर अरिजीत का गाना चलाओ",
-            "सुबह 6 बजे का अलार्म लगाओ",
-            "टॉर्च चालू करो",
-            "आवाज़ बढ़ाओ",
-            "दिल्ली का रास्ता दिखाओ",
-            "नोट लिखो दूध लाना है",
-            "25 गुणा 4 कितना हुआ",
-            "नीचे स्क्रॉल करो",
-            "क्या कर सकते हो"
-        )
-        for (s in samples) ex.addView(label("› $s", 14f, C.MUTED), lpm(MATCH, WRAP, top = 6))
-        col.addView(ex, lpm(MATCH, WRAP, top = 16))
         return col
     }
 
@@ -276,7 +267,8 @@ class MainActivity : Activity() {
 
     private fun team(): View {
         val col = page()
-        val live = Agents.list.count { it.live && (it.id != "ai" || Brain.ready()) }
+        val needsAi = setOf("ai", "companion")
+        val live = Agents.list.count { it.live && (it.id !in needsAi || Brain.ready()) }
         col.addView(title("मेरी टीम", "${Agents.list.size} एजेंट · $live तैयार · ${Agents.list.size - live} जल्द आएँगे"))
 
         val m = hbox().apply {
@@ -298,7 +290,7 @@ class MainActivity : Activity() {
             t.addView(label(a.name, 15.5f, C.TEXT, true))
             t.addView(label(a.desc, 12.5f, C.MUTED))
             r.addView(t, lp(0, WRAP, 1f))
-            val ready = a.live && (a.id != "ai" || Brain.ready())
+            val ready = a.live && (a.id !in needsAi || Brain.ready())
             val word = if (ready) "तैयार" else if (a.live) "चाबी चाहिए" else "जल्द आएगा"
             r.addView(dot(if (ready) C.GREEN else if (a.live) C.AMBER else C.MUTED), lpm(dp(8), dp(8), left = 6))
             r.addView(label(word, 13f, if (ready) C.GREEN else if (a.live) C.AMBER else C.MUTED), lpm(WRAP, WRAP, left = 6))
@@ -410,6 +402,33 @@ class MainActivity : Activity() {
         val col = page()
         col.addView(title("सेटिंग", "AI, आवाज़, खबरें और अनुमतियाँ"))
 
+        // ----- naam aur pahunch -----
+        col.addView(section("नाम और पहुँच"), lpm(MATCH, WRAP, top = 16))
+        val nm = card()
+        nm.addView(label("नाम", 15.5f, C.TEXT, true))
+        nm.addView(label("इस नाम के बिना यह कुछ नहीं करेगा, न बोलेगा।", 12.5f, C.MUTED))
+        val nameF = field("जैसे: जारविस", Jarvis.assistantName, false)
+        nm.addView(nameF, lpm(MATCH, dp(46), top = 8))
+        nm.addView(smallButton("नाम सेव करें", C.CYAN) {
+            Jarvis.updateName(nameF.text.toString())
+            Toast.makeText(this, "सेव हो गया", Toast.LENGTH_SHORT).show()
+            show(4)
+        }, lpm(MATCH, dp(44), top = 8))
+        col.addView(nm, lpm(MATCH, WRAP, top = 8))
+
+        val pinC = card()
+        pinC.addView(label("PIN · सिर्फ़ आपकी पहुँच", 15.5f, C.TEXT, true))
+        pinC.addView(label("PIN रखने पर ऐप खोलते ही PIN माँगेगा। खाली छोड़कर PIN हटा सकते हैं। यह फ़ोन में ही रहता है, कहीं भेजा नहीं जाता।", 12.5f, C.MUTED))
+        val pinF2 = field("4 से 6 अंक", Jarvis.pin, true).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
+        }
+        pinC.addView(pinF2, lpm(MATCH, dp(46), top = 8))
+        pinC.addView(smallButton("PIN सेव करें", C.CYAN) {
+            Jarvis.updatePin(pinF2.text.toString())
+            Toast.makeText(this, if (Jarvis.pin.isBlank()) "PIN हटा दिया" else "PIN सेव हो गया", Toast.LENGTH_SHORT).show()
+        }, lpm(MATCH, dp(44), top = 8))
+        col.addView(pinC, lpm(MATCH, WRAP, top = 8))
+
         // ----- AI -----
         col.addView(section("AI दिमाग़ · सवाल-जवाब"), lpm(MATCH, WRAP, top = 16))
         val ai = card()
@@ -435,7 +454,7 @@ class MainActivity : Activity() {
         ai.addView(modelF, lpm(MATCH, dp(46), top = 8))
         ai.addView(smallButton("सेव करें", C.CYAN) {
             Brain.save(keyF.text.toString(), modelF.text.toString())
-            Toast.makeText(this, "सेव हो गया। अब बोलिए: जारविस, …", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "सेव हो गया। अब बोलिए: ${Jarvis.assistantName}, …", Toast.LENGTH_LONG).show()
             show(4)
         }, lpm(MATCH, dp(44), top = 10))
         col.addView(ai, lpm(MATCH, WRAP, top = 8))
@@ -449,13 +468,13 @@ class MainActivity : Activity() {
             }, lpm(MATCH, WRAP, top = 8)
         )
         col.addView(
-            toggleRaw("सिर्फ़ \"जारविस\" कहने पर काम करो", "बिना \"जारविस\" कहे न कुछ करेगा, न बोलेगा", Jarvis.wakeOnly) {
+            toggleRaw("सिर्फ़ \"${Jarvis.assistantName}\" कहने पर काम करो", "बिना नाम लिए न कुछ करेगा, न बोलेगा", Jarvis.wakeOnly) {
                 Jarvis.updateWakeOnly(it)
             }, lpm(MATCH, WRAP, top = 8)
         )
         val sec = card()
         sec.addView(label("गुप्त शब्द (ऐच्छिक)", 15.5f, C.TEXT, true))
-        sec.addView(label("यह असली आवाज़ पहचान नहीं है। भरने पर \"जारविस\" के बाद यह शब्द बोले बिना काम नहीं होगा। जो आपका शब्द सुन ले, वह भी चला सकता है।", 12.5f, C.MUTED))
+        sec.addView(label("यह असली आवाज़ पहचान नहीं है। भरने पर \"${Jarvis.assistantName}\" के बाद यह शब्द बोले बिना काम नहीं होगा। जो आपका शब्द सुन ले, वह भी चला सकता है।", 12.5f, C.MUTED))
         val secF = field("जैसे: नीलकमल", Jarvis.secret, false)
         sec.addView(secF, lpm(MATCH, dp(46), top = 8))
         sec.addView(smallButton("शब्द सेव करें", C.CYAN) {

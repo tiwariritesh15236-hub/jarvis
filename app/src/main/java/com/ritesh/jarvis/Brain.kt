@@ -19,6 +19,7 @@ import java.util.Locale
 object Brain {
     private val main = Handler(Looper.getMainLooper())
     private val history = ArrayList<Pair<String, String>>()
+    private val chatHistory = ArrayList<Pair<String, String>>()
 
     class Result(val ok: Boolean, val say: String, val cmds: List<String>)
 
@@ -56,12 +57,21 @@ object Brain {
 
     fun ready(): Boolean = key().isNotBlank()
 
-    fun forget() { history.clear() }
+    fun forget() { history.clear(); chatHistory.clear() }
 
-    private fun system(): String {
+    private fun system(companion: Boolean = false): String {
         val now = SimpleDateFormat("EEEE, dd MMMM yyyy, hh:mm a", Locale.US).format(Date())
+        val name = Jarvis.assistantName
+        if (companion) {
+            return """
+You are $name, a warm listening companion inside the user's Android phone. The user speaks Hindi, Hinglish or English; reply in their language, 1 to 3 short sentences, no markdown, no emoji, spoken aloud.
+Just listen and respond with care. Ask one gentle follow-up question if it helps them open up. Never diagnose, never claim to be a therapist or doctor, and when distress sounds serious (hopelessness, self-harm, safety), gently encourage them to reach out to a trusted person or a professional, without being preachy. Do not pretend to be a human or a romantic partner, and do not encourage the user to rely on you instead of real people in their life.
+Reply with ONLY one JSON object: {"say": "<what to speak>", "cmds": []}. "cmds" is always empty here, this mode never runs phone commands.
+Current date and time: $now
+""".trim()
+        }
         return """
-You are JARVIS, a voice assistant living inside the user's Android phone. The user speaks Hindi, Hinglish or English. Reply in the user's language (default: Hindi in Devanagari). Your reply is spoken aloud, so keep it short (1 to 3 sentences), with no markdown, no lists and no emoji.
+You are $name, a voice assistant living inside the user's Android phone. The user speaks Hindi, Hinglish or English. Reply in the user's language (default: Hindi in Devanagari). Your reply is spoken aloud, so keep it short (1 to 3 sentences), with no markdown, no lists and no emoji.
 Be honest. Never say you did something unless it is in "cmds". You cannot make payments. You cannot control other apps except through the commands below. You do not know live facts (news, prices, scores) unless the user tells you; say so instead of guessing. Never claim to be human.
 Reply with ONLY one JSON object: {"say": "<what to speak>", "cmds": ["<command>", ...]}. "cmds" is optional and empty when the user only asked a question. At most 5 commands, run in order by the phone. Each command must be a short Hindi sentence in exactly one of these forms:
 - "<नाम या नंबर> को कॉल करो" (opens the dialer, the user presses call)
@@ -82,29 +92,33 @@ Current date and time: $now
 """.trim()
     }
 
-    fun ask(text: String, cb: (Result) -> Unit) {
-        history.add(Pair("user", text))
-        while (history.size > 12) history.removeAt(0)
-        val snap = ArrayList(history)
+    fun ask(text: String, cb: (Result) -> Unit) = ask(text, false, history, cb)
+
+    fun askCompanion(text: String, cb: (Result) -> Unit) = ask(text, true, chatHistory, cb)
+
+    private fun ask(text: String, companion: Boolean, h: ArrayList<Pair<String, String>>, cb: (Result) -> Unit) {
+        h.add(Pair("user", text))
+        while (h.size > 12) h.removeAt(0)
+        val snap = ArrayList(h)
         while (snap.isNotEmpty() && snap[0].first != "user") snap.removeAt(0)
         val prov = provider()
         val k = key()
         val m = model()
         Thread {
             val res = try {
-                call(prov, k, m, snap)
+                call(prov, k, m, snap, companion)
             } catch (e: Exception) {
                 Result(false, "AI से जवाब नहीं आ पाया। " + (e.message ?: "कोई गड़बड़ हुई।"), emptyList())
             }
             main.post {
-                if (res.ok) history.add(Pair("assistant", if (res.say.isBlank()) "ठीक है।" else res.say))
+                if (res.ok) h.add(Pair("assistant", if (res.say.isBlank()) "ठीक है।" else res.say))
                 cb(res)
             }
         }.start()
     }
 
-    private fun call(prov: String, key: String, model: String, hist: List<Pair<String, String>>): Result {
-        val sys = system()
+    private fun call(prov: String, key: String, model: String, hist: List<Pair<String, String>>, companion: Boolean = false): Result {
+        val sys = system(companion)
         val out: String = when (prov) {
             "claude" -> {
                 val msgs = JSONArray()

@@ -35,6 +35,9 @@ object Jarvis {
     var announceBody = false
     var announceCalls = true
     var secret = ""
+    var assistantName = "जारविस"
+    var pin = ""
+    var unlocked = false
     var heard = ""
     var reply: CommandRouter.Reply? = null
 
@@ -57,6 +60,9 @@ object Jarvis {
         announceBody = prefs().getBoolean("announce_body", false)
         announceCalls = prefs().getBoolean("announce_call", true)
         secret = prefs().getString("secret", "") ?: ""
+        assistantName = (prefs().getString("name", "") ?: "").ifBlank { "जारविस" }
+        pin = prefs().getString("pin", "") ?: ""
+        unlocked = pin.isBlank()
         tts = TextToSpeech(app) { st ->
             if (st == TextToSpeech.SUCCESS) {
                 tts?.language = Locale("hi", "IN")
@@ -128,6 +134,22 @@ object Jarvis {
         prefs().edit().putString("secret", secret).apply()
     }
 
+    fun updateName(s: String) {
+        assistantName = s.trim().ifBlank { "जारविस" }
+        prefs().edit().putString("name", assistantName).apply()
+    }
+
+    fun updatePin(s: String) {
+        pin = s.trim()
+        prefs().edit().putString("pin", pin).apply()
+        if (pin.isBlank()) unlocked = true
+    }
+
+    fun tryUnlock(s: String): Boolean {
+        if (pin.isBlank() || s.trim() == pin) { unlocked = true; return true }
+        return false
+    }
+
     // ---------- bolna ----------
 
     private fun endSpeaking() {
@@ -162,23 +184,38 @@ object Jarvis {
 
     // ---------- hukm ----------
 
-    private val wake = Regex(
+    private val defaultWake = Regex(
         "^\\W*(hey |hi |ok |okay |ओके |हे |अरे )?(jarvis|jarvish|jarwis|jarvice|जारविस|जार्विस|जर्विस|जारवीस|जारविश|जार्वीस|जरविस|जारवि)[,.!? ]*",
         RegexOption.IGNORE_CASE
     )
 
+    /** User ne jo naam rakha hai, usi se pehchane. Default "जारविस"/"jarvis" ho to purane spellings bhi chalte hain. */
+    private fun wake(): Regex {
+        val n = assistantName.trim()
+        if (n.isBlank() || n == "जारविस" || n.equals("jarvis", true)) return defaultWake
+        return Regex("^\\W*(hey |hi |ok |okay |ओके |हे |अरे )?" + Regex.escape(n) + "[,.!? ]*", RegexOption.IGNORE_CASE)
+    }
+
     private val questionWord = Regex("क्या|कौन|कैसे|क्यों|कब|कहाँ|कहां|कितना|कितने|कितनी|समझाओ|मतलब|बारे में|\\bwhat\\b|\\bwho\\b|\\bhow\\b|\\bwhy\\b|\\bwhen\\b|\\bwhere\\b|explain|tell me")
-    private val localWord = Regex("समय|बैटरी|battery|तारीख|alarm|अलार्म|टाइमर|torch|टॉर्च|volume|आवाज|याद|नोट|note|screenshot|स्क्रीनशॉट|स्क्रॉल|call|कॉल|मैसेज|रास्ता|गाना|यूट्यूब|खोल|kholo")
+    private val localWord = Regex("समय|बैटरी|battery|तारीख|alarm|अलार्म|टाइमर|torch|टॉर्च|volume|आवाज|याद|नोट|note|screenshot|स्क्रीनशॉट|स्क्रॉल|call|कॉल|मैसेज|रास्ता|गाना|यूट्यूब|खोल|kholo|game|गेम|खेल")
 
     private fun looksLikeQuestion(q: String): Boolean =
         q.split(Regex("\\s+")).size >= 4 && questionWord.containsMatchIn(q) && !localWord.containsMatchIn(q)
+
+    private val companionWord = Regex(
+        "साथी|मेरा दोस्त|दिल की बात|मन की बात|मन उदास|मन दुखी|उदास हूँ|अकेला महसूस|अकेलापन|परेशान हूँ|tension|टेंशन|stress|स्ट्रेस|दुखी हूँ|कोई नहीं सुनता|बात करनी है|बात करो ना",
+        RegexOption.IGNORE_CASE
+    )
+
+    private fun isCompanion(q: String): Boolean = companionWord.containsMatchIn(q)
 
     fun run(raw: String, fromVoice: Boolean = false) {
         var cmd = raw.trim()
         if (cmd.isBlank()) return
         val now = System.currentTimeMillis()
-        val hadWake = wake.containsMatchIn(cmd)
-        cmd = cmd.replace(wake, "").trim()
+        val w = wake()
+        val hadWake = w.containsMatchIn(cmd)
+        cmd = cmd.replace(w, "").trim()
         val awake = now < awakeUntil
 
         // chup rehna: bina "jarvis" kahe kuch nahi karta, kuch nahi bolta
@@ -190,7 +227,7 @@ object Jarvis {
         awakeUntil = now + 10000
 
         if (cmd.isBlank()) {
-            heard = "जारविस"
+            heard = assistantName
             val r = CommandRouter.Reply("manager", "जी, बोलिए।")
             reply = r
             speak(r.text)
@@ -200,6 +237,20 @@ object Jarvis {
         heard = cmd
         val speakUnknown = !fromVoice || hadWake || awake
         val q = cmd.lowercase(Locale.getDefault())
+
+        if (isCompanion(q)) {
+            if (!Brain.ready()) {
+                finish(cmd, CommandRouter.Reply("companion", "बात करने के लिए सेटिंग में AI की चाबी डालिए, तब मैं ध्यान से सुन पाऊँगा।", false), speakUnknown)
+                return
+            }
+            if (!online()) {
+                finish(cmd, CommandRouter.Reply("companion", "इंटरनेट नहीं है, अभी बात नहीं कर पाऊँगा। पर मैं यहीं हूँ, नेट आते ही बोलिए।", false), speakUnknown)
+                return
+            }
+            Brain.askCompanion(cmd) { res -> onBrain(cmd, res, "companion") }
+            return
+        }
+
         val brainFirst = Brain.ready() && looksLikeQuestion(q)
 
         var local: CommandRouter.Reply? = null
@@ -220,8 +271,17 @@ object Jarvis {
         Brain.ask(cmd) { res -> onBrain(cmd, res) }
     }
 
-    private fun onBrain(cmd: String, res: Brain.Result) {
-        if (!res.ok) { finish(cmd, CommandRouter.Reply("ai", res.say, false), true); return }
+    private fun onBrain(cmd: String, res: Brain.Result, agent: String = "ai") {
+        if (!res.ok) { finish(cmd, CommandRouter.Reply(agent, res.say, false), true); return }
+        if (agent == "companion") {
+            val say = res.say.ifBlank { "मैं सुन रहा हूँ।" }
+            TaskLog.add("companion", "$cmd → $say", TaskLog.DONE)
+            pending.add(Job("companion", cmd, true))
+            reply = CommandRouter.Reply("companion", say)
+            speak(say)
+            onEvent?.invoke()
+            return
+        }
         val outs = ArrayList<CommandRouter.Reply>()
         for (c in res.cmds.take(5)) {
             val rr = router.handle(c)
