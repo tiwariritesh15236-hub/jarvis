@@ -66,10 +66,16 @@ class VoiceService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (Build.VERSION.SDK_INT >= 30) {
-            startForeground(1, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
-        } else {
-            startForeground(1, notification())
+        try {
+            if (Build.VERSION.SDK_INT >= 30) {
+                startForeground(1, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+            } else {
+                startForeground(1, notification())
+            }
+        } catch (e: Exception) {
+            // system ne abhi mic wali service shuru karne ki ijazat nahi di
+            stopSelf()
+            return START_NOT_STICKY
         }
         schedule(300)
         return START_STICKY
@@ -130,6 +136,7 @@ class VoiceService : Service() {
             .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             .putExtra(RecognizerIntent.EXTRA_LANGUAGE, "hi-IN")
             .putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            .putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, !Jarvis.online())
             .putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
         muteBeep(true)
         try {

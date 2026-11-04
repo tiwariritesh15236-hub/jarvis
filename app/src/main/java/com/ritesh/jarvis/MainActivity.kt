@@ -20,6 +20,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Switch
 import android.widget.TextView
+import android.widget.Toast
 
 class MainActivity : Activity() {
 
@@ -39,7 +40,10 @@ class MainActivity : Activity() {
         window.navigationBarColor = C.NAV
         office = OfficeView(this)
         requestPermissions(
-            arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS, Manifest.permission.READ_CONTACTS),
+            arrayOf(
+                Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS, Manifest.permission.READ_CONTACTS,
+                Manifest.permission.READ_PHONE_STATE, Manifest.permission.READ_CALL_LOG
+            ),
             1
         )
 
@@ -95,7 +99,7 @@ class MainActivity : Activity() {
     private fun stateText(): String = when {
         !Jarvis.handsFree -> "माइक बंद · चालू करने के लिए गोले को दबाइए"
         Jarvis.speaking -> "बोल रहा हूँ…"
-        Jarvis.listening -> "सुन रहा हूँ… बिना बटन दबाए बोलिए"
+        Jarvis.listening -> if (Jarvis.wakeOnly) "सुन रहा हूँ… पहले \"जारविस\" कहिए" else "सुन रहा हूँ… बिना बटन दबाए बोलिए"
         else -> "तैयार हो रहा हूँ…"
     }
 
@@ -107,7 +111,8 @@ class MainActivity : Activity() {
             Jarvis.listening -> "LIVE"
             else -> "WAIT"
         }
-        return "● SYSTEM ONLINE  ·  MIC: $mic  ·  AGENTS: $live/${Agents.list.size}"
+        val net = if (Jarvis.online()) "ON" else "OFF"
+        return "● JARVIS  ·  NET:$net  ·  MIC:$mic  ·  AGENTS:$live/${Agents.list.size}"
     }
 
     private fun updateState() {
@@ -142,7 +147,7 @@ class MainActivity : Activity() {
 
     private fun buildNav() {
         nav.removeAllViews()
-        val names = listOf("होम", "टीम", "ऑफिस", "काम", "सुरक्षा")
+        val names = listOf("होम", "टीम", "ऑफिस", "काम", "सेटिंग")
         for (i in names.indices) {
             nav.addView(TextView(this).apply {
                 text = names[i]
@@ -200,7 +205,7 @@ class MainActivity : Activity() {
         val s2 = label(stateText(), 17f, C.TEXT, true).apply { gravity = Gravity.CENTER }
         status = s2
         col.addView(s2, lpm(MATCH, WRAP, top = 6))
-        col.addView(label("\"जारविस, टॉर्च चालू करो\" या सीधे \"टॉर्च चालू करो\"", 13.5f, C.MUTED).apply { gravity = Gravity.CENTER }, lpm(MATCH, WRAP, top = 2))
+        col.addView(label("पहले \"जारविस\" बोलिए, फिर हुक्म: \"जारविस, टॉर्च चालू करो\"", 13.5f, C.MUTED).apply { gravity = Gravity.CENTER }, lpm(MATCH, WRAP, top = 2))
 
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
             val warn = card(C.AMBER)
@@ -271,7 +276,7 @@ class MainActivity : Activity() {
 
     private fun team(): View {
         val col = page()
-        val live = Agents.list.count { it.live }
+        val live = Agents.list.count { it.live && (it.id != "ai" || Brain.ready()) }
         col.addView(title("मेरी टीम", "${Agents.list.size} एजेंट · $live तैयार · ${Agents.list.size - live} जल्द आएँगे"))
 
         val m = hbox().apply {
@@ -293,8 +298,10 @@ class MainActivity : Activity() {
             t.addView(label(a.name, 15.5f, C.TEXT, true))
             t.addView(label(a.desc, 12.5f, C.MUTED))
             r.addView(t, lp(0, WRAP, 1f))
-            r.addView(dot(if (a.live) C.GREEN else C.MUTED), lpm(dp(8), dp(8), left = 6))
-            r.addView(label(if (a.live) "तैयार" else "जल्द आएगा", 13f, if (a.live) C.GREEN else C.MUTED), lpm(WRAP, WRAP, left = 6))
+            val ready = a.live && (a.id != "ai" || Brain.ready())
+            val word = if (ready) "तैयार" else if (a.live) "चाबी चाहिए" else "जल्द आएगा"
+            r.addView(dot(if (ready) C.GREEN else if (a.live) C.AMBER else C.MUTED), lpm(dp(8), dp(8), left = 6))
+            r.addView(label(word, 13f, if (ready) C.GREEN else if (a.live) C.AMBER else C.MUTED), lpm(WRAP, WRAP, left = 6))
             col.addView(r, lpm(MATCH, WRAP, top = 8))
         }
         return col
@@ -305,7 +312,7 @@ class MainActivity : Activity() {
     private fun officeTab(): View {
         val col = page()
         col.addView(title("JARVIS ऑफिस", "Manager बुलाता है, एजेंट डायरी लेकर आता है, फिर अपनी सीट पर काम करता है"))
-        col.addView(office, lpm(MATCH, dp(700), top = 14))
+        col.addView(office, lpm(MATCH, dp(780), top = 14))
         col.addView(label("यहाँ सिर्फ़ असली काम दिखता है। बोलकर कोई हुक्म दीजिए, फिर यहाँ देखिए।", 13.5f, C.MUTED), lpm(MATCH, WRAP, top = 12))
         return col
     }
@@ -343,7 +350,7 @@ class MainActivity : Activity() {
         return col
     }
 
-    // ---------- 4. suraksha ----------
+    // ---------- 4. setting ----------
 
     private fun toggleRaw(name: String, sub: String, checked: Boolean, onChange: (Boolean) -> Unit): View {
         val r = hbox().apply {
@@ -371,21 +378,117 @@ class MainActivity : Activity() {
     private fun toggle(key: String, name: String, sub: String): View =
         toggleRaw(name, sub, Jarvis.router.allowed(key)) { Jarvis.router.setAllowed(key, it) }
 
+    private fun section(t: String): View =
+        label(t, 13f, C.CYAN, true, true).apply { letterSpacing = 0.12f }
+
+    private fun field(hintText: String, value: String, hidden: Boolean): EditText = EditText(this).apply {
+        hint = hintText
+        setHintTextColor(C.MUTED)
+        setTextColor(C.TEXT)
+        textSize = 15f
+        setText(value)
+        inputType = if (hidden) InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD else InputType.TYPE_CLASS_TEXT
+        setSingleLine()
+        background = shape(C.SURFACE, C.BORDER, 12)
+        setPadding(dp(14), 0, dp(14), 0)
+    }
+
+    private fun smallButton(t: String, color: Int, onClick: () -> Unit): Button = Button(this).apply {
+        text = t
+        isAllCaps = false
+        setTextColor(C.ON_CYAN)
+        background = shape(color, 0, 12)
+        setOnClickListener { onClick() }
+    }
+
+    private fun listenerOn(): Boolean {
+        val s = Settings.Secure.getString(contentResolver, "enabled_notification_listeners") ?: ""
+        return s.contains(packageName)
+    }
+
     private fun safety(): View {
         val col = page()
-        col.addView(title("अनुमति और सुरक्षा", "JARVIS क्या कर सकता है, यह आप तय करते हैं"))
+        col.addView(title("सेटिंग", "AI, आवाज़, खबरें और अनुमतियाँ"))
 
+        // ----- AI -----
+        col.addView(section("AI दिमाग़ · सवाल-जवाब"), lpm(MATCH, WRAP, top = 16))
+        val ai = card()
+        val on = Brain.ready()
+        ai.addView(label(if (on) "✓ चालू: ${Brain.providerName()}" else "✗ बंद: AI की चाबी (API key) डालिए", 14.5f, if (on) C.GREEN else C.AMBER, true))
+        ai.addView(label("चाबी सिर्फ़ इसी फ़ोन में रहती है। आपके सवाल चुनी हुई AI कंपनी के सर्वर पर जाते हैं और उसका खर्च आपके अकाउंट पर लगता है। इंटरनेट न हो तो सवाल-जवाब नहीं चलेंगे, फ़ोन के काम चलेंगे।", 12.5f, C.MUTED), lpm(MATCH, WRAP, top = 4))
+        val prow = hbox()
+        val provs = listOf("gemini" to "Gemini", "claude" to "Claude", "openai" to "ChatGPT")
+        for ((id, nm) in provs) {
+            val sel = Brain.provider() == id
+            prow.addView(Button(this).apply {
+                text = nm
+                isAllCaps = false
+                setTextColor(if (sel) C.ON_CYAN else C.TEXT)
+                background = shape(if (sel) C.CYAN else C.SURFACE2, C.BORDER, 12)
+                setOnClickListener { Brain.setProvider(id); show(4) }
+            }, lpm(0, dp(44), left = 6, weight = 1f))
+        }
+        ai.addView(prow, lpm(MATCH, WRAP, top = 10))
+        val keyF = field("API key यहाँ चिपकाइए", Brain.key(), true)
+        val modelF = field("मॉडल का नाम", Brain.model(), false)
+        ai.addView(keyF, lpm(MATCH, dp(46), top = 10))
+        ai.addView(modelF, lpm(MATCH, dp(46), top = 8))
+        ai.addView(smallButton("सेव करें", C.CYAN) {
+            Brain.save(keyF.text.toString(), modelF.text.toString())
+            Toast.makeText(this, "सेव हो गया। अब बोलिए: जारविस, …", Toast.LENGTH_LONG).show()
+            show(4)
+        }, lpm(MATCH, dp(44), top = 10))
+        col.addView(ai, lpm(MATCH, WRAP, top = 8))
+
+        // ----- awaaz -----
+        col.addView(section("आवाज़"), lpm(MATCH, WRAP, top = 18))
         col.addView(
-            toggleRaw("हमेशा सुनो (बिना बटन)", "माइक चालू रहता है, बोलते ही काम करता है", Jarvis.handsFree) {
+            toggleRaw("हमेशा सुनो (बिना बटन)", "माइक चालू रहता है", Jarvis.handsFree) {
                 Jarvis.updateHandsFree(it)
                 if (it) startVoice()
-            }, lpm(MATCH, WRAP, top = 14)
+            }, lpm(MATCH, WRAP, top = 8)
         )
         col.addView(
-            toggleRaw("सिर्फ़ \"जारविस\" कहने पर काम करो", "आस-पास की बातचीत से गलती से काम नहीं होगा", Jarvis.wakeOnly) {
+            toggleRaw("सिर्फ़ \"जारविस\" कहने पर काम करो", "बिना \"जारविस\" कहे न कुछ करेगा, न बोलेगा", Jarvis.wakeOnly) {
                 Jarvis.updateWakeOnly(it)
             }, lpm(MATCH, WRAP, top = 8)
         )
+        val sec = card()
+        sec.addView(label("गुप्त शब्द (ऐच्छिक)", 15.5f, C.TEXT, true))
+        sec.addView(label("यह असली आवाज़ पहचान नहीं है। भरने पर \"जारविस\" के बाद यह शब्द बोले बिना काम नहीं होगा। जो आपका शब्द सुन ले, वह भी चला सकता है।", 12.5f, C.MUTED))
+        val secF = field("जैसे: नीलकमल", Jarvis.secret, false)
+        sec.addView(secF, lpm(MATCH, dp(46), top = 8))
+        sec.addView(smallButton("शब्द सेव करें", C.CYAN) {
+            Jarvis.updateSecret(secF.text.toString())
+            Toast.makeText(this, "सेव हो गया", Toast.LENGTH_SHORT).show()
+        }, lpm(MATCH, dp(44), top = 8))
+        col.addView(sec, lpm(MATCH, WRAP, top = 8))
+
+        // ----- khabar -----
+        col.addView(section("खबरें · बिना \"जारविस\" कहे बोलेगा"), lpm(MATCH, WRAP, top = 18))
+        col.addView(
+            toggleRaw("आने वाले मैसेज की खबर", "\"X का मैसेज आया\" बोलेगा", Jarvis.announceMessages) { Jarvis.updateFlag("announce_msg", it) },
+            lpm(MATCH, WRAP, top = 8)
+        )
+        col.addView(
+            toggleRaw("मैसेज में लिखा भी पढ़ो", "बंद रखना सुरक्षित है, आस-पास वाले भी सुन सकते हैं", Jarvis.announceBody) { Jarvis.updateFlag("announce_body", it) },
+            lpm(MATCH, WRAP, top = 8)
+        )
+        col.addView(
+            toggleRaw("फ़ोन आने और कटने की खबर", "किसका आया, बात हुई या छूट गया", Jarvis.announceCalls) { Jarvis.updateFlag("announce_call", it) },
+            lpm(MATCH, WRAP, top = 8)
+        )
+        val nl = card()
+        nl.addView(label(if (listenerOn()) "✓ नोटिफ़िकेशन की अनुमति मिली है (मैसेज की खबर चलेगी)" else "✗ मैसेज की खबर के लिए नोटिफ़िकेशन की अनुमति चाहिए", 14.5f, if (listenerOn()) C.GREEN else C.AMBER))
+        if (!listenerOn()) {
+            nl.addView(smallButton("अनुमति की सेटिंग खोलिए", C.CYAN) {
+                startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+            }, lpm(MATCH, dp(44), top = 8))
+        }
+        col.addView(nl, lpm(MATCH, WRAP, top = 8))
+
+        // ----- anumati -----
+        col.addView(section("काम की अनुमति"), lpm(MATCH, WRAP, top = 18))
         col.addView(toggle("msg", "मैसेज", "स्क्रीन खुलती है, भेजना आप दबाते हैं"), lpm(MATCH, WRAP, top = 8))
         col.addView(toggle("call", "कॉल", "डायलर खुलता है, कॉल आप दबाते हैं"), lpm(MATCH, WRAP, top = 8))
         col.addView(toggle("phone", "फ़ोन कंट्रोल", "ऐप खोलना, स्क्रॉल, क्लिक, टॉर्च, आवाज़, अलार्म"), lpm(MATCH, WRAP, top = 8))
@@ -403,26 +506,29 @@ class MainActivity : Activity() {
 
         val micOk = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         val contactsOk = checkSelfPermission(Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED
+        val phoneOk = checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
+        val logOk = checkSelfPermission(Manifest.permission.READ_CALL_LOG) == PackageManager.PERMISSION_GRANTED
         val a11yOk = JarvisAccessibilityService.instance != null
         val st = card()
         st.addView(label("फ़ोन की असली स्थिति", 16f, C.TEXT, true))
-        st.addView(label((if (micOk) "✓ माइक की अनुमति मिली है" else "✗ माइक की अनुमति नहीं है"), 14.5f, if (micOk) C.GREEN else C.RED), lpm(MATCH, WRAP, top = 6))
-        st.addView(label((if (contactsOk) "✓ कॉन्टैक्ट पढ़ सकता है (नाम से कॉल/मैसेज)" else "✗ कॉन्टैक्ट की अनुमति नहीं (नाम से कॉल नहीं होगा, नंबर बोलना होगा)"), 14.5f, if (contactsOk) C.GREEN else C.AMBER), lpm(MATCH, WRAP, top = 4))
-        st.addView(label((if (a11yOk) "✓ फ़ोन कंट्रोल चालू है" else "✗ फ़ोन कंट्रोल बंद है (स्क्रॉल, क्लिक, पीछे, होम के लिए चालू करें)"), 14.5f, if (a11yOk) C.GREEN else C.AMBER), lpm(MATCH, WRAP, top = 4))
+        st.addView(label((if (micOk) "✓ माइक" else "✗ माइक की अनुमति नहीं है"), 14.5f, if (micOk) C.GREEN else C.RED), lpm(MATCH, WRAP, top = 6))
+        st.addView(label((if (contactsOk) "✓ कॉन्टैक्ट (नाम से कॉल/मैसेज, कॉलर का नाम)" else "✗ कॉन्टैक्ट की अनुमति नहीं (नंबर ही बोलना होगा)"), 14.5f, if (contactsOk) C.GREEN else C.AMBER), lpm(MATCH, WRAP, top = 4))
+        st.addView(label((if (phoneOk && logOk) "✓ फ़ोन की खबर (कॉलर का नंबर)" else "✗ फ़ोन की खबर के लिए फ़ोन/कॉल-लॉग की अनुमति चाहिए"), 14.5f, if (phoneOk && logOk) C.GREEN else C.AMBER), lpm(MATCH, WRAP, top = 4))
+        st.addView(label((if (a11yOk) "✓ फ़ोन कंट्रोल चालू" else "✗ फ़ोन कंट्रोल बंद (स्क्रॉल, क्लिक, पीछे, होम के लिए)"), 14.5f, if (a11yOk) C.GREEN else C.AMBER), lpm(MATCH, WRAP, top = 4))
+        st.addView(label(if (Jarvis.online()) "✓ इंटरनेट चालू: AI सवाल-जवाब चल सकते हैं" else "✗ इंटरनेट बंद: सिर्फ़ फ़ोन के काम चलेंगे", 14.5f, if (Jarvis.online()) C.GREEN else C.AMBER), lpm(MATCH, WRAP, top = 4))
         if (!a11yOk) {
-            st.addView(Button(this).apply {
-                text = "सेटिंग खोलिए"
-                isAllCaps = false
-                setTextColor(C.ON_CYAN)
-                background = shape(C.CYAN, 0, 12)
-                setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+            st.addView(smallButton("फ़ोन कंट्रोल की सेटिंग खोलिए", C.CYAN) {
+                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
             }, lpm(MATCH, dp(44), top = 10))
         }
         col.addView(st, lpm(MATCH, WRAP, top = 12))
 
         val bg = card()
-        bg.addView(label("बैकग्राउंड में सुनता रहे", 16f, C.CYAN, true))
-        bg.addView(label("फ़ोन की सेटिंग > ऐप > JARVIS AI > बैटरी में \"Unrestricted / बिना रोक\" चुनिए, वरना कुछ फ़ोन ऐप को बंद कर देते हैं।", 14f, C.MUTED))
+        bg.addView(label("ऐप बंद होने पर भी सुनता रहे", 16f, C.CYAN, true))
+        bg.addView(label("ऐप को बंद (स्वाइप) करने पर भी सुनना चलता रहता है। पर बैटरी की रोक हटानी होगी, और फ़ोन रीस्टार्ट होने के बाद आने वाली नोटिफ़िकेशन दबानी होगी।", 13.5f, C.MUTED))
+        bg.addView(smallButton("बैटरी की रोक हटाइए", C.CYAN) {
+            startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+        }, lpm(MATCH, dp(44), top = 8))
         col.addView(bg, lpm(MATCH, WRAP, top = 12))
 
         val honest = card()

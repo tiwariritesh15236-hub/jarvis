@@ -51,7 +51,7 @@ class OfficeView(ctx: Context) : View(ctx) {
         for ((i, a) in Agents.list.withIndex()) {
             val row = i / 4
             val col = i % 4
-            walkers.add(W(a, 0.125f + col * 0.25f, 0.44f + row * 0.165f, i))
+            walkers.add(W(a, 0.125f + col * 0.25f, 0.40f + row * 0.125f, i))
         }
     }
 

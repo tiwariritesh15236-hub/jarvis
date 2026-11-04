@@ -1,14 +1,20 @@
 package com.ritesh.jarvis
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.provider.ContactsContract
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import java.util.Locale
 
 /**
- * JARVIS ka dimaag (poore app mein ek hi). Awaaz service aur screen dono yahin se kaam lete hain.
+ * JARVIS ka dimaag (poore app mein ek hi). Awaaz service, screen, call aur message sab yahin se kaam lete hain.
  * Jo kaam sach mein hua, wahi TaskLog mein jaata hai.
  */
 object Jarvis {
@@ -18,11 +24,17 @@ object Jarvis {
     private var ttsReady = false
     private var inited = false
     private val main = Handler(Looper.getMainLooper())
+    private val queued = ArrayList<String>()
+    private var awakeUntil = 0L
 
     @Volatile var speaking = false
     @Volatile var listening = false
     var handsFree = true
-    var wakeOnly = false
+    var wakeOnly = true
+    var announceMessages = true
+    var announceBody = false
+    var announceCalls = true
+    var secret = ""
     var heard = ""
     var reply: CommandRouter.Reply? = null
 
@@ -40,7 +52,11 @@ object Jarvis {
         app = ctx.applicationContext
         router = CommandRouter(app)
         handsFree = prefs().getBoolean("handsfree", true)
-        wakeOnly = prefs().getBoolean("wakeonly", false)
+        wakeOnly = prefs().getBoolean("wakeonly", true)
+        announceMessages = prefs().getBoolean("announce_msg", true)
+        announceBody = prefs().getBoolean("announce_body", false)
+        announceCalls = prefs().getBoolean("announce_call", true)
+        secret = prefs().getString("secret", "") ?: ""
         tts = TextToSpeech(app) { st ->
             if (st == TextToSpeech.SUCCESS) {
                 tts?.language = Locale("hi", "IN")
@@ -50,9 +66,41 @@ object Jarvis {
                     override fun onError(id: String?) { endSpeaking() }
                 })
                 ttsReady = true
+                main.post {
+                    val q = ArrayList(queued)
+                    queued.clear()
+                    for (t in q) speak(t)
+                }
             }
         }
     }
+
+    // ---------- internet / contact ----------
+
+    fun online(): Boolean {
+        return try {
+            val cm = app.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val n = cm.activeNetwork ?: return false
+            val c = cm.getNetworkCapabilities(n) ?: return false
+            c.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    fun contactName(number: String?): String? {
+        if (number.isNullOrBlank()) return null
+        if (app.checkSelfPermission(Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) return null
+        return try {
+            val uri = Uri.withAppendedPath(ContactsContract.PhoneLookup.CONTENT_FILTER_URI, Uri.encode(number))
+            app.contentResolver.query(uri, arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME), null, null, null)
+                ?.use { if (it.moveToFirst()) it.getString(0) else null }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    // ---------- settings ----------
 
     fun updateHandsFree(v: Boolean) {
         handsFree = v
@@ -66,6 +114,22 @@ object Jarvis {
         prefs().edit().putBoolean("wakeonly", v).apply()
     }
 
+    fun updateFlag(key: String, v: Boolean) {
+        when (key) {
+            "announce_msg" -> announceMessages = v
+            "announce_body" -> announceBody = v
+            "announce_call" -> announceCalls = v
+        }
+        prefs().edit().putBoolean(key, v).apply()
+    }
+
+    fun updateSecret(s: String) {
+        secret = s.trim()
+        prefs().edit().putString("secret", secret).apply()
+    }
+
+    // ---------- bolna ----------
+
     private fun endSpeaking() {
         // aawaz ki poonchh (echo) na sune isliye thoda ruk kar
         main.postDelayed({
@@ -75,7 +139,7 @@ object Jarvis {
     }
 
     fun speak(text: String) {
-        if (!ttsReady) return
+        if (!ttsReady) { queued.add(text); return }
         speaking = true
         VoiceService.instance?.pause()
         onState?.invoke()
@@ -85,14 +149,46 @@ object Jarvis {
         main.postDelayed({ if (speaking) { speaking = false; onState?.invoke() } }, 20000)
     }
 
-    private val wake = Regex("^(hey |hi |ok |okay |ओके |हे )?(jarvis|jarvish|jarwis|जारविस|जार्विस|जर्विस|जारवि|जार्वि)[,.! ]*", RegexOption.IGNORE_CASE)
+    /** Bahar se aayi khabar (message, phone). Isme "jarvis" kehna zaroori nahi. */
+    fun announce(text: String, agent: String = "inbox") {
+        main.post {
+            TaskLog.add(agent, text, TaskLog.DONE)
+            pending.add(Job(agent, text, true))
+            reply = CommandRouter.Reply(agent, text)
+            speak(text)
+            onEvent?.invoke()
+        }
+    }
+
+    // ---------- hukm ----------
+
+    private val wake = Regex(
+        "^\\W*(hey |hi |ok |okay |ओके |हे |अरे )?(jarvis|jarvish|jarwis|jarvice|जारविस|जार्विस|जर्विस|जारवीस|जारविश|जार्वीस|जरविस|जारवि)[,.!? ]*",
+        RegexOption.IGNORE_CASE
+    )
+
+    private val questionWord = Regex("क्या|कौन|कैसे|क्यों|कब|कहाँ|कहां|कितना|कितने|कितनी|समझाओ|मतलब|बारे में|\\bwhat\\b|\\bwho\\b|\\bhow\\b|\\bwhy\\b|\\bwhen\\b|\\bwhere\\b|explain|tell me")
+    private val localWord = Regex("समय|बैटरी|battery|तारीख|alarm|अलार्म|टाइमर|torch|टॉर्च|volume|आवाज|याद|नोट|note|screenshot|स्क्रीनशॉट|स्क्रॉल|call|कॉल|मैसेज|रास्ता|गाना|यूट्यूब|खोल|kholo")
+
+    private fun looksLikeQuestion(q: String): Boolean =
+        q.split(Regex("\\s+")).size >= 4 && questionWord.containsMatchIn(q) && !localWord.containsMatchIn(q)
 
     fun run(raw: String, fromVoice: Boolean = false) {
         var cmd = raw.trim()
         if (cmd.isBlank()) return
+        val now = System.currentTimeMillis()
         val hadWake = wake.containsMatchIn(cmd)
         cmd = cmd.replace(wake, "").trim()
-        if (fromVoice && wakeOnly && !hadWake) return
+        val awake = now < awakeUntil
+
+        // chup rehna: bina "jarvis" kahe kuch nahi karta, kuch nahi bolta
+        if (fromVoice && wakeOnly && !hadWake && !awake) return
+        if (fromVoice && secret.isNotBlank() && !awake) {
+            if (!cmd.contains(secret, ignoreCase = true)) return
+            cmd = cmd.replace(secret, "", ignoreCase = true).trim()
+        }
+        awakeUntil = now + 10000
+
         if (cmd.isBlank()) {
             heard = "जारविस"
             val r = CommandRouter.Reply("manager", "जी, बोलिए।")
@@ -102,12 +198,56 @@ object Jarvis {
             return
         }
         heard = cmd
-        val r = router.handle(cmd)
+        val speakUnknown = !fromVoice || hadWake || awake
+        val q = cmd.lowercase(Locale.getDefault())
+        val brainFirst = Brain.ready() && looksLikeQuestion(q)
+
+        var local: CommandRouter.Reply? = null
+        if (!brainFirst) {
+            val r = router.handle(cmd)
+            if (!r.unknown) { finish(cmd, r, true); return }
+            local = r
+        }
+        if (!Brain.ready()) {
+            val r = CommandRouter.Reply("manager", "यह काम मुझे अभी नहीं आता। सवाल-जवाब के लिए सेटिंग में AI की चाबी डालिए।", false, true)
+            finish(cmd, local?.let { r } ?: r, speakUnknown)
+            return
+        }
+        if (!online()) {
+            finish(cmd, CommandRouter.Reply("ai", "इंटरनेट नहीं है, इसलिए सवाल-जवाब अभी नहीं हो सकते। फ़ोन के काम ऑफ़लाइन चलते हैं।", false), speakUnknown)
+            return
+        }
+        Brain.ask(cmd) { res -> onBrain(cmd, res) }
+    }
+
+    private fun onBrain(cmd: String, res: Brain.Result) {
+        if (!res.ok) { finish(cmd, CommandRouter.Reply("ai", res.say, false), true); return }
+        val outs = ArrayList<CommandRouter.Reply>()
+        for (c in res.cmds.take(5)) {
+            val rr = router.handle(c)
+            if (!rr.unknown) {
+                outs.add(rr)
+                TaskLog.add(rr.agent, "$c → ${rr.text}", if (rr.ok) TaskLog.DONE else TaskLog.FAILED)
+                pending.add(Job(rr.agent, c, rr.ok))
+            }
+        }
+        val failed = outs.filter { !it.ok }.joinToString(" ") { it.text }
+        var say = res.say.ifBlank { outs.joinToString(" ") { it.text } }
+        if (failed.isNotBlank() && res.say.isNotBlank()) say = say + " " + failed
+        if (say.isBlank()) say = "ठीक है।"
+        val ok = outs.all { it.ok }
+        TaskLog.add("ai", "$cmd → $say", if (ok) TaskLog.DONE else TaskLog.FAILED)
+        pending.add(Job("ai", cmd, ok))
+        reply = CommandRouter.Reply("ai", say, ok)
+        speak(say)
+        onEvent?.invoke()
+    }
+
+    private fun finish(cmd: String, r: CommandRouter.Reply, speakIt: Boolean) {
         reply = r
         TaskLog.add(r.agent, "$cmd → ${r.text}", if (r.ok) TaskLog.DONE else TaskLog.FAILED)
         pending.add(Job(r.agent, cmd, r.ok))
-        // bina samjhi baat (aas-paas ki baatcheet) ko awaaz se baar-baar na dohraye
-        if (!(fromVoice && r.unknown)) speak(r.text)
+        if (speakIt) speak(r.text)
         onEvent?.invoke()
     }
 
