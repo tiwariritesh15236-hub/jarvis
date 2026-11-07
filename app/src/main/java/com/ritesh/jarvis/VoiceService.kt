@@ -42,7 +42,11 @@ class VoiceService : Service() {
     private val h = Handler(Looper.getMainLooper())
     private var rec: SpeechRecognizer? = null
     private var active = false
+    private var pendingStart = false
+    private var cycles = 0
     private val startRun = Runnable { begin() }
+    private val watchdogRun = Runnable { watchdog() }
+    private val healthRun = Runnable { healthCheck() }
 
     override fun onBind(i: Intent?): IBinder? = null
 
@@ -78,17 +82,47 @@ class VoiceService : Service() {
             return START_NOT_STICKY
         }
         schedule(300)
+        h.postDelayed(healthRun, 60_000)
         return START_STICKY
     }
 
     private fun schedule(ms: Long) {
         h.removeCallbacks(startRun)
+        pendingStart = true
         h.postDelayed(startRun, ms)
+    }
+
+    /** Agar recognizer startListening ke baad 20 second tak chup-chaap atka reh jaaye
+     * (kuch phone/OEM par ye bug hota hai), to use zabardasti todkar dobara shuru karte hain. */
+    private fun armWatchdog() {
+        h.removeCallbacks(watchdogRun)
+        h.postDelayed(watchdogRun, 20_000)
+    }
+
+    private fun watchdog() {
+        if (!active) return
+        try { rec?.cancel() } catch (e: Exception) {}
+        try { rec?.destroy() } catch (e: Exception) {}
+        rec = null
+        active = false
+        Jarvis.partialText = ""
+        schedule(300)
+    }
+
+    /** Har 1 minute mein check karta hai ki service chalu reh gayi par sunna band ho gaya
+     * ho (kuch phone background mic silently rok dete hain). Har ~30 cycle par recognizer
+     * engine bhi taaza bana dete hain, taaki lambi der chalne par engine kharab na ho. */
+    private fun healthCheck() {
+        h.postDelayed(healthRun, 60_000)
+        if (!Jarvis.handsFree) return
+        // na sunna chal raha hai, na dobara shuru hone wala hai — to zabardasti chalu karte hain
+        if (!active && !pendingStart) schedule(300)
     }
 
     /** Bolte samay ya mic band hone par sunna rokta hai. */
     fun pause() {
         h.removeCallbacks(startRun)
+        h.removeCallbacks(watchdogRun)
         if (active) {
             try { rec?.cancel() } catch (e: Exception) {}
             active = false
@@ -109,6 +143,7 @@ class VoiceService : Service() {
     }
 
     private fun begin() {
+        pendingStart = false
         if (!Jarvis.handsFree) {
             Jarvis.listening = false
             Jarvis.onState?.invoke()
@@ -128,6 +163,13 @@ class VoiceService : Service() {
             return
         }
         if (active) return
+        cycles++
+        // kuch phone/OEM par recognizer engine lambi der chalne par sust/kharab ho jaata hai,
+        // isliye har 25 cycle par naya bana dete hain, taaki sunna hamesha taaza bana rahe
+        if (rec != null && cycles % 25 == 0) {
+            try { rec?.destroy() } catch (e: Exception) {}
+            rec = null
+        }
         if (rec == null) {
             rec = SpeechRecognizer.createSpeechRecognizer(this)
             rec?.setRecognitionListener(listener)
@@ -139,10 +181,12 @@ class VoiceService : Service() {
             .putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, !Jarvis.online())
             .putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
             .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            // dheere ya ruk-ruk kar bola hukm bhi poora sun le, jaldi na kaate
-            .putExtra("android.speech.extra.SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS", 1800)
-            .putExtra("android.speech.extra.SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS", 1800)
-            .putExtra("android.speech.extra.SPEECH_INPUT_MINIMUM_LENGTH_MILLIS", 15000)
+            // dheere ya ruk-ruk kar bola hukm bhi poora sun le, jaldi na kaate, par 15 second
+            // ki majboori na ho — pehle ye 15000 tha jisse chhota hukm bhi 15 second baad
+            // hi process hota tha, isliye jawab "atka hua" lagta tha
+            .putExtra("android.speech.extra.SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS", 1200)
+            .putExtra("android.speech.extra.SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS", 1200)
+            .putExtra("android.speech.extra.SPEECH_INPUT_MINIMUM_LENGTH_MILLIS", 1500)
             .putExtra("android.speech.extra.DICTATION_MODE", true)
         muteBeep(true)
         try {
@@ -150,8 +194,12 @@ class VoiceService : Service() {
             active = true
             Jarvis.listening = true
             Jarvis.onState?.invoke()
+            armWatchdog()
         } catch (e: Exception) {
             active = false
+            // engine shayad kharab ho gaya; agli baar taaza banayenge
+            try { rec?.destroy() } catch (x: Exception) {}
+            rec = null
             schedule(1500)
         }
         h.postDelayed({ muteBeep(false) }, 700)
@@ -174,6 +222,7 @@ class VoiceService : Service() {
 
         override fun onResults(b: Bundle?) {
             active = false
+            h.removeCallbacks(watchdogRun)
             Jarvis.partialText = ""
             val cands = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION) ?: ArrayList()
             // jo candidate "jarvis"/naam se shuru hota hai use pehle lo, warna sabse behtar (pehla) candidate
@@ -184,6 +233,7 @@ class VoiceService : Service() {
 
         override fun onError(e: Int) {
             active = false
+            h.removeCallbacks(watchdogRun)
             Jarvis.partialText = ""
             if (e == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) { stopSelf(); return }
             if (e == SpeechRecognizer.ERROR_RECOGNIZER_BUSY || e == SpeechRecognizer.ERROR_CLIENT) {
