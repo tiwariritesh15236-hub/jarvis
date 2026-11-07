@@ -135,9 +135,15 @@ class VoiceService : Service() {
         val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
             .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             .putExtra(RecognizerIntent.EXTRA_LANGUAGE, "hi-IN")
-            .putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            .putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
             .putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, !Jarvis.online())
             .putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
+            .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            // dheere ya ruk-ruk kar bola hukm bhi poora sun le, jaldi na kaate
+            .putExtra("android.speech.extra.SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS", 1800)
+            .putExtra("android.speech.extra.SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS", 1800)
+            .putExtra("android.speech.extra.SPEECH_INPUT_MINIMUM_LENGTH_MILLIS", 15000)
+            .putExtra("android.speech.extra.DICTATION_MODE", true)
         muteBeep(true)
         try {
             rec?.startListening(i)
@@ -152,29 +158,49 @@ class VoiceService : Service() {
     }
 
     private val listener = object : RecognitionListener {
-        override fun onReadyForSpeech(p: Bundle?) {}
+        override fun onReadyForSpeech(p: Bundle?) { Jarvis.lastMicError = "" }
         override fun onBeginningOfSpeech() {}
         override fun onRmsChanged(v: Float) {}
         override fun onBufferReceived(b: ByteArray?) {}
         override fun onEndOfSpeech() {}
-        override fun onPartialResults(b: Bundle?) {}
+
+        // jo bol rahe hain wo jeete-ji screen par dikhta hai, isse pata chalta hai mic chal raha hai
+        override fun onPartialResults(b: Bundle?) {
+            val t = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
+            if (!t.isNullOrBlank()) { Jarvis.partialText = t; Jarvis.onState?.invoke() }
+        }
+
         override fun onEvent(t: Int, b: Bundle?) {}
 
         override fun onResults(b: Bundle?) {
             active = false
-            val text = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
+            Jarvis.partialText = ""
+            val cands = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION) ?: ArrayList()
+            // jo candidate "jarvis"/naam se shuru hota hai use pehle lo, warna sabse behtar (pehla) candidate
+            val text = cands.firstOrNull { Jarvis.hasWake(it) } ?: cands.firstOrNull()
             if (!text.isNullOrBlank()) Jarvis.run(text, true)
             schedule(400)
         }
 
         override fun onError(e: Int) {
             active = false
+            Jarvis.partialText = ""
             if (e == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) { stopSelf(); return }
             if (e == SpeechRecognizer.ERROR_RECOGNIZER_BUSY || e == SpeechRecognizer.ERROR_CLIENT) {
                 try { rec?.destroy() } catch (x: Exception) {}
                 rec = null
             }
             val quiet = e == SpeechRecognizer.ERROR_NO_MATCH || e == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
+            if (!quiet) {
+                Jarvis.lastMicError = when (e) {
+                    SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "इंटरनेट धीमा है या नहीं है, इसलिए आवाज़ पहचानने में दिक्कत हो रही है।"
+                    SpeechRecognizer.ERROR_AUDIO -> "माइक से आवाज़ नहीं मिल रही। कोई और ऐप माइक इस्तेमाल कर रहा हो सकता है।"
+                    SpeechRecognizer.ERROR_SERVER -> "आवाज़ पहचानने वाले सर्वर में दिक्कत है।"
+                    SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "आवाज़ पहचानने वाला अभी व्यस्त है, फिर कोशिश कर रहा हूँ।"
+                    else -> "आवाज़ सुनने में दिक्कत आई (कोड $e), फिर कोशिश कर रहा हूँ।"
+                }
+                Jarvis.onState?.invoke()
+            }
             schedule(if (quiet) 150 else 1200)
         }
     }

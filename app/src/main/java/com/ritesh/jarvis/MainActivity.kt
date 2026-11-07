@@ -32,6 +32,8 @@ class MainActivity : Activity() {
     private var reactor: ReactorView? = null
     private var status: TextView? = null
     private var strip: TextView? = null
+    private var partialCard: View? = null
+    private var partialLabel: TextView? = null
 
     override fun onCreate(s: Bundle?) {
         super.onCreate(s)
@@ -152,6 +154,9 @@ class MainActivity : Activity() {
         }
         status?.text = stateText()
         strip?.text = stripText()
+        val show = Jarvis.listening && Jarvis.partialText.isNotBlank()
+        partialCard?.visibility = if (show) View.VISIBLE else View.GONE
+        if (show) partialLabel?.text = "\"${Jarvis.partialText}\""
     }
 
     // ---------- tab ----------
@@ -163,6 +168,8 @@ class MainActivity : Activity() {
         reactor = null
         status = null
         strip = null
+        partialCard = null
+        partialLabel = null
         val v = when (i) {
             0 -> home()
             1 -> team()
@@ -246,6 +253,21 @@ class MainActivity : Activity() {
             warn.addView(label("माइक की अनुमति नहीं है। फ़ोन की सेटिंग में JARVIS AI को माइक की अनुमति दीजिए।", 14f, C.RED))
             col.addView(warn, lpm(MATCH, WRAP, top = 14))
         }
+        if (Jarvis.lastMicError.isNotBlank()) {
+            val warn = card(C.AMBER)
+            warn.addView(label("माइक", 12.5f, C.AMBER, true))
+            warn.addView(label(Jarvis.lastMicError, 14f, C.AMBER))
+            col.addView(warn, lpm(MATCH, WRAP, top = 14))
+        }
+        val live = card(C.CYAN)
+        live.addView(label("सुन रहा हूँ — अभी तक", 12.5f, C.CYAN, true))
+        val pl = label("", 16f, C.TEXT)
+        partialLabel = pl
+        live.addView(pl)
+        live.visibility = if (Jarvis.listening && Jarvis.partialText.isNotBlank()) View.VISIBLE else View.GONE
+        pl.text = "\"${Jarvis.partialText}\""
+        partialCard = live
+        col.addView(live, lpm(MATCH, WRAP, top = 14))
 
         if (Jarvis.heard.isNotEmpty()) {
             val c1 = card()
@@ -267,7 +289,7 @@ class MainActivity : Activity() {
 
     private fun team(): View {
         val col = page()
-        val needsAi = setOf("ai", "companion", "research", "design", "marketing")
+        val needsAi = setOf("ai", "companion", "research", "design", "marketing", "dev")
         val live = Agents.list.count { it.live && (it.id !in needsAi || Brain.ready()) }
         col.addView(title("मेरी टीम", "${Agents.list.size} एजेंट · $live तैयार · ${Agents.list.size - live} जल्द आएँगे"))
 

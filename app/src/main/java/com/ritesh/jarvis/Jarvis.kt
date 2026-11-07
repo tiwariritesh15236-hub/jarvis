@@ -29,6 +29,8 @@ object Jarvis {
 
     @Volatile var speaking = false
     @Volatile var listening = false
+    @Volatile var partialText = ""
+    @Volatile var lastMicError = ""
     var handsFree = true
     var wakeOnly = true
     var announceMessages = true
@@ -196,6 +198,9 @@ object Jarvis {
         return Regex("^\\W*(hey |hi |ok |okay |ओके |हे |अरे )?" + Regex.escape(n) + "[,.!? ]*", RegexOption.IGNORE_CASE)
     }
 
+    /** VoiceService ko kai candidates mein se sahi wala chunne mein madad karta hai. */
+    fun hasWake(text: String): Boolean = wake().containsMatchIn(text)
+
     private val questionWord = Regex("क्या|कौन|कैसे|क्यों|कब|कहाँ|कहां|कितना|कितने|कितनी|समझाओ|मतलब|बारे में|\\bwhat\\b|\\bwho\\b|\\bhow\\b|\\bwhy\\b|\\bwhen\\b|\\bwhere\\b|explain|tell me")
     private val localWord = Regex("समय|बैटरी|battery|तारीख|alarm|अलार्म|टाइमर|torch|टॉर्च|volume|आवाज|याद|नोट|note|screenshot|स्क्रीनशॉट|स्क्रॉल|call|कॉल|मैसेज|रास्ता|गाना|यूट्यूब|खोल|kholo|game|गेम|खेल")
 
@@ -209,8 +214,9 @@ object Jarvis {
     private val researchWord = Regex("रिसर्च|research|गहराई से|खोजकर बताओ|विस्तार से बताओ|पूरी जानकारी दो", RegexOption.IGNORE_CASE)
     private val designWord = Regex("डिज़ाइन आइडिया|डिजाइन आइडिया|डिज़ाइन बताओ|डिजाइन बताओ|लोगो आइडिया|poster idea|design idea|logo idea", RegexOption.IGNORE_CASE)
     private val marketingWord = Regex("मार्केटिंग|marketing|विज्ञापन लिखो|ad likho|कैप्शन लिखो|caption likho|पोस्ट लिखो", RegexOption.IGNORE_CASE)
+    private val devWord = Regex("कोड|कोडिंग|code|coding|डेवलपर|developer|ऐप बनाओ|app banao|वेबसाइट बनाओ|website banao|प्रोग्राम|program|bug|बग", RegexOption.IGNORE_CASE)
 
-    private val talkAgents = setOf("companion", "research", "design", "marketing")
+    private val talkAgents = setOf("companion", "research", "design", "marketing", "dev")
 
     /** Inme se koi mode mile to Brain seedhe baat/draft deta hai, phone-kaam nahi chalata. */
     private fun talkMode(q: String): String? = when {
@@ -218,6 +224,7 @@ object Jarvis {
         researchWord.containsMatchIn(q) -> "research"
         designWord.containsMatchIn(q) -> "design"
         marketingWord.containsMatchIn(q) -> "marketing"
+        devWord.containsMatchIn(q) -> "dev"
         else -> null
     }
 
@@ -225,7 +232,8 @@ object Jarvis {
         "companion" to "बात करने के लिए",
         "research" to "रिसर्च के लिए",
         "design" to "डिज़ाइन आइडिया के लिए",
-        "marketing" to "मार्केटिंग ड्राफ़्ट के लिए"
+        "marketing" to "मार्केटिंग ड्राफ़्ट के लिए",
+        "dev" to "कोडिंग सलाह के लिए"
     )
 
     fun run(raw: String, fromVoice: Boolean = false) {
