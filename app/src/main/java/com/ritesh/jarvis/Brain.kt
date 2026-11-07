@@ -18,8 +18,8 @@ import java.util.Locale
  */
 object Brain {
     private val main = Handler(Looper.getMainLooper())
-    private val history = ArrayList<Pair<String, String>>()
-    private val chatHistory = ArrayList<Pair<String, String>>()
+    private val histories = HashMap<String, ArrayList<Pair<String, String>>>()
+    private fun histFor(mode: String) = histories.getOrPut(mode) { ArrayList() }
 
     class Result(val ok: Boolean, val say: String, val cmds: List<String>)
 
@@ -57,16 +57,33 @@ object Brain {
 
     fun ready(): Boolean = key().isNotBlank()
 
-    fun forget() { history.clear(); chatHistory.clear() }
+    fun forget() { histories.values.forEach { it.clear() } }
 
-    private fun system(companion: Boolean = false): String {
+    private fun system(mode: String = "assistant"): String {
         val now = SimpleDateFormat("EEEE, dd MMMM yyyy, hh:mm a", Locale.US).format(Date())
         val name = Jarvis.assistantName
-        if (companion) {
+        if (mode == "companion") {
             return """
 You are $name, a warm listening companion inside the user's Android phone. The user speaks Hindi, Hinglish or English; reply in their language, 1 to 3 short sentences, no markdown, no emoji, spoken aloud.
 Just listen and respond with care. Ask one gentle follow-up question if it helps them open up. Never diagnose, never claim to be a therapist or doctor, and when distress sounds serious (hopelessness, self-harm, safety), gently encourage them to reach out to a trusted person or a professional, without being preachy. Do not pretend to be a human or a romantic partner, and do not encourage the user to rely on you instead of real people in their life.
 Reply with ONLY one JSON object: {"say": "<what to speak>", "cmds": []}. "cmds" is always empty here, this mode never runs phone commands.
+Current date and time: $now
+""".trim()
+        }
+        if (mode == "research") {
+            return """
+You are $name's Research agent, inside the user's Android phone. The user speaks Hindi, Hinglish or English; reply in their language, no markdown, no emoji, spoken aloud, so keep it to one short, clear paragraph (max ~6 sentences covering the key points).
+You have no live internet access here: you answer from what you already know, not from a fresh web search. If the topic needs very recent facts (today's news, live prices, scores), say plainly that you cannot check that live. Never make up facts or sources. Never claim to be human.
+Reply with ONLY one JSON object: {"say": "<the research summary>", "cmds": []}.
+Current date and time: $now
+""".trim()
+        }
+        if (mode == "design" || mode == "marketing") {
+            val who = if (mode == "design") "Design" else "Marketing"
+            return """
+You are $name's $who agent, inside the user's Android phone. The user speaks Hindi, Hinglish or English; reply in their language, no markdown, no emoji, spoken aloud, one short paragraph (max ~6 sentences).
+You draft ideas and text only (a layout idea, a caption, an ad line) from the user's description. You cannot open a design tool, create image files, or post anything; say so plainly if the user expects that. Never claim to be human.
+Reply with ONLY one JSON object: {"say": "<the draft>", "cmds": []}.
 Current date and time: $now
 """.trim()
         }
@@ -92,11 +109,12 @@ Current date and time: $now
 """.trim()
     }
 
-    fun ask(text: String, cb: (Result) -> Unit) = ask(text, false, history, cb)
+    fun ask(text: String, cb: (Result) -> Unit) = askMode(text, "assistant", cb)
 
-    fun askCompanion(text: String, cb: (Result) -> Unit) = ask(text, true, chatHistory, cb)
+    fun askCompanion(text: String, cb: (Result) -> Unit) = askMode(text, "companion", cb)
 
-    private fun ask(text: String, companion: Boolean, h: ArrayList<Pair<String, String>>, cb: (Result) -> Unit) {
+    fun askMode(text: String, mode: String, cb: (Result) -> Unit) {
+        val h = histFor(mode)
         h.add(Pair("user", text))
         while (h.size > 12) h.removeAt(0)
         val snap = ArrayList(h)
@@ -106,7 +124,7 @@ Current date and time: $now
         val m = model()
         Thread {
             val res = try {
-                call(prov, k, m, snap, companion)
+                call(prov, k, m, snap, mode)
             } catch (e: Exception) {
                 Result(false, "AI से जवाब नहीं आ पाया। " + (e.message ?: "कोई गड़बड़ हुई।"), emptyList())
             }
@@ -117,8 +135,8 @@ Current date and time: $now
         }.start()
     }
 
-    private fun call(prov: String, key: String, model: String, hist: List<Pair<String, String>>, companion: Boolean = false): Result {
-        val sys = system(companion)
+    private fun call(prov: String, key: String, model: String, hist: List<Pair<String, String>>, mode: String = "assistant"): Result {
+        val sys = system(mode)
         val out: String = when (prov) {
             "claude" -> {
                 val msgs = JSONArray()

@@ -95,7 +95,7 @@ class CommandRouter(private val ctx: Context) {
 
             // ---- manager khud ----
             has(q, "kaun ho|tum kaun|aap kaun|who are you|तुम कौन|आप कौन|तुम्हारा नाम|tumhara naam|तुम्हारा नाम") ->
-                Reply("manager", "मैं JARVIS हूँ, आपका अपना असिस्टेंट। मेरी टीम में कई एजेंट हैं, और मैं आपके फ़ोन पर बोलकर काम करता हूँ।")
+                Reply("manager", "मैं ${Jarvis.assistantName} हूँ, आपका अपना असिस्टेंट। मेरी टीम में कई एजेंट हैं, और मैं आपके फ़ोन पर बोलकर काम करता हूँ।")
             has(q, "namaste|नमस्ते|hello|हैलो|हेलो|सुप्रभात|good morning") ->
                 Reply("manager", "नमस्ते! बताइए, क्या काम है?")
             has(q, "thank|धन्यवाद|शुक्रिया|shukriya|dhanyavad") ->

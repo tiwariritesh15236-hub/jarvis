@@ -206,8 +206,27 @@ object Jarvis {
         "साथी|मेरा दोस्त|दिल की बात|मन की बात|मन उदास|मन दुखी|उदास हूँ|अकेला महसूस|अकेलापन|परेशान हूँ|tension|टेंशन|stress|स्ट्रेस|दुखी हूँ|कोई नहीं सुनता|बात करनी है|बात करो ना",
         RegexOption.IGNORE_CASE
     )
+    private val researchWord = Regex("रिसर्च|research|गहराई से|खोजकर बताओ|विस्तार से बताओ|पूरी जानकारी दो", RegexOption.IGNORE_CASE)
+    private val designWord = Regex("डिज़ाइन आइडिया|डिजाइन आइडिया|डिज़ाइन बताओ|डिजाइन बताओ|लोगो आइडिया|poster idea|design idea|logo idea", RegexOption.IGNORE_CASE)
+    private val marketingWord = Regex("मार्केटिंग|marketing|विज्ञापन लिखो|ad likho|कैप्शन लिखो|caption likho|पोस्ट लिखो", RegexOption.IGNORE_CASE)
 
-    private fun isCompanion(q: String): Boolean = companionWord.containsMatchIn(q)
+    private val talkAgents = setOf("companion", "research", "design", "marketing")
+
+    /** Inme se koi mode mile to Brain seedhe baat/draft deta hai, phone-kaam nahi chalata. */
+    private fun talkMode(q: String): String? = when {
+        companionWord.containsMatchIn(q) -> "companion"
+        researchWord.containsMatchIn(q) -> "research"
+        designWord.containsMatchIn(q) -> "design"
+        marketingWord.containsMatchIn(q) -> "marketing"
+        else -> null
+    }
+
+    private val modeLabel = mapOf(
+        "companion" to "बात करने के लिए",
+        "research" to "रिसर्च के लिए",
+        "design" to "डिज़ाइन आइडिया के लिए",
+        "marketing" to "मार्केटिंग ड्राफ़्ट के लिए"
+    )
 
     fun run(raw: String, fromVoice: Boolean = false) {
         var cmd = raw.trim()
@@ -238,16 +257,18 @@ object Jarvis {
         val speakUnknown = !fromVoice || hadWake || awake
         val q = cmd.lowercase(Locale.getDefault())
 
-        if (isCompanion(q)) {
+        val mode = talkMode(q)
+        if (mode != null) {
+            val label = modeLabel[mode] ?: "इसके लिए"
             if (!Brain.ready()) {
-                finish(cmd, CommandRouter.Reply("companion", "बात करने के लिए सेटिंग में AI की चाबी डालिए, तब मैं ध्यान से सुन पाऊँगा।", false), speakUnknown)
+                finish(cmd, CommandRouter.Reply(mode, "$label सेटिंग में AI की चाबी डालिए।", false), speakUnknown)
                 return
             }
             if (!online()) {
-                finish(cmd, CommandRouter.Reply("companion", "इंटरनेट नहीं है, अभी बात नहीं कर पाऊँगा। पर मैं यहीं हूँ, नेट आते ही बोलिए।", false), speakUnknown)
+                finish(cmd, CommandRouter.Reply(mode, "इंटरनेट नहीं है, $label अभी नहीं हो पाएगा।", false), speakUnknown)
                 return
             }
-            Brain.askCompanion(cmd) { res -> onBrain(cmd, res, "companion") }
+            Brain.askMode(cmd, mode) { res -> onBrain(cmd, res, mode) }
             return
         }
 
@@ -273,11 +294,11 @@ object Jarvis {
 
     private fun onBrain(cmd: String, res: Brain.Result, agent: String = "ai") {
         if (!res.ok) { finish(cmd, CommandRouter.Reply(agent, res.say, false), true); return }
-        if (agent == "companion") {
-            val say = res.say.ifBlank { "मैं सुन रहा हूँ।" }
-            TaskLog.add("companion", "$cmd → $say", TaskLog.DONE)
-            pending.add(Job("companion", cmd, true))
-            reply = CommandRouter.Reply("companion", say)
+        if (agent in talkAgents) {
+            val say = res.say.ifBlank { "ठीक है।" }
+            TaskLog.add(agent, "$cmd → $say", TaskLog.DONE)
+            pending.add(Job(agent, cmd, true))
+            reply = CommandRouter.Reply(agent, say)
             speak(say)
             onEvent?.invoke()
             return

@@ -267,7 +267,7 @@ class MainActivity : Activity() {
 
     private fun team(): View {
         val col = page()
-        val needsAi = setOf("ai", "companion")
+        val needsAi = setOf("ai", "companion", "research", "design", "marketing")
         val live = Agents.list.count { it.live && (it.id !in needsAi || Brain.ready()) }
         col.addView(title("मेरी टीम", "${Agents.list.size} एजेंट · $live तैयार · ${Agents.list.size - live} जल्द आएँगे"))
 
