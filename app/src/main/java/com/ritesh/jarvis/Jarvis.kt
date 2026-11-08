@@ -32,7 +32,7 @@ object Jarvis {
     @Volatile var partialText = ""
     @Volatile var lastMicError = ""
     var handsFree = true
-    var wakeOnly = true
+    var wakeOnly = false
     var announceMessages = true
     var announceBody = false
     var announceCalls = true
@@ -57,7 +57,7 @@ object Jarvis {
         app = ctx.applicationContext
         router = CommandRouter(app)
         handsFree = prefs().getBoolean("handsfree", true)
-        wakeOnly = prefs().getBoolean("wakeonly", true)
+        wakeOnly = prefs().getBoolean("wakeonly", false)
         announceMessages = prefs().getBoolean("announce_msg", true)
         announceBody = prefs().getBoolean("announce_body", false)
         announceCalls = prefs().getBoolean("announce_call", true)
