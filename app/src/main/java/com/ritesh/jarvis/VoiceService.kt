@@ -184,9 +184,9 @@ class VoiceService : Service() {
             // dheere ya ruk-ruk kar bola hukm bhi poora sun le, jaldi na kaate, par 15 second
             // ki majboori na ho — pehle ye 15000 tha jisse chhota hukm bhi 15 second baad
             // hi process hota tha, isliye jawab "atka hua" lagta tha
-            .putExtra("android.speech.extra.SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS", 1200)
-            .putExtra("android.speech.extra.SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS", 1200)
-            .putExtra("android.speech.extra.SPEECH_INPUT_MINIMUM_LENGTH_MILLIS", 1500)
+            .putExtra("android.speech.extra.SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS", 700)
+            .putExtra("android.speech.extra.SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS", 700)
+            .putExtra("android.speech.extra.SPEECH_INPUT_MINIMUM_LENGTH_MILLIS", 800)
             .putExtra("android.speech.extra.DICTATION_MODE", true)
         muteBeep(true)
         try {
